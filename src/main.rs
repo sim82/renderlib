@@ -63,6 +63,10 @@ struct Uniforms {
 }
 
 const SHADER_SRC: &str = r#"
+    struct Uniforms {
+        rotation: mat4x4<f32>,
+    };
+
     struct VertexInput {
         @location(0) position: vec3<f32>,
         @location(1) color: vec3<f32>,

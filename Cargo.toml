@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 wgpu = "30"
-winit = "0.30"
+winit = { version = "0.30", features = ["x11", "rwh_06"], default-features = false}
 pollster = "1"
 bytemuck = { version = "1.16", features = ["derive"] }
 anyhow = "1.0.104"
