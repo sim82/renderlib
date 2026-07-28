@@ -4,8 +4,9 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-wgpu = "0.19"
-winit = "0.29"
-pollster = "0.3"
+wgpu = "30"
+winit = "0.30"
+pollster = "1"
 bytemuck = { version = "1.16", features = ["derive"] }
-
+anyhow = "1.0.104"
+thiserror = "2.0.19"
