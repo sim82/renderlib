@@ -1,4 +1,8 @@
 use std::sync::Arc;
+use std::time::Instant;
+
+use cgmath::SquareMatrix;
+use wgpu::util::DeviceExt;
 
 use winit::{
     application::ApplicationHandler,
@@ -6,6 +10,87 @@ use winit::{
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop, OwnedDisplayHandle},
     window::{Window, WindowId},
 };
+
+// Vertex data for a triangle
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct Vertex {
+    position: [f32; 3],
+    color: [f32; 3],
+}
+
+impl Vertex {
+    fn desc() -> wgpu::VertexBufferLayout<'static> {
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[
+                wgpu::VertexAttribute {
+                    offset: 0,
+                    shader_location: 0,
+                    format: wgpu::VertexFormat::Float32x3,
+                },
+                wgpu::VertexAttribute {
+                    offset: std::mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
+                    shader_location: 1,
+                    format: wgpu::VertexFormat::Float32x3,
+                },
+            ],
+        }
+    }
+}
+
+const VERTICES: &[Vertex] = &[
+    Vertex {
+        position: [0.0, 0.5, 0.0],
+        color: [1.0, 0.0, 0.0],
+    },
+    Vertex {
+        position: [-0.5, -0.5, 0.0],
+        color: [0.0, 1.0, 0.0],
+    },
+    Vertex {
+        position: [0.5, -0.5, 0.0],
+        color: [0.0, 0.0, 1.0],
+    },
+];
+
+// Uniform data for rotation
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct Uniforms {
+    rotation: [[f32; 4]; 4],
+}
+
+const SHADER_SRC: &str = r#"
+    struct VertexInput {
+        @location(0) position: vec3<f32>,
+        @location(1) color: vec3<f32>,
+    };
+
+    struct VertexOutput {
+        @builtin(position) clip_position: vec4<f32>,
+        @location(0) color: vec3<f32>,
+    };
+
+    @group(0) @binding(0)
+    var<uniform> uniforms: Uniforms;
+
+    @vertex
+    fn vs_main(
+        model: VertexInput,
+    ) -> VertexOutput {
+        var out: VertexOutput;
+        out.clip_position = uniforms.rotation * vec4<f32>(model.position, 1.0);
+        out.color = model.color;
+        return out;
+    }
+
+    @fragment
+    fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+        return vec4<f32>(in.color, 1.0);
+    }
+"#;
 
 struct State {
     instance: wgpu::Instance,
@@ -15,6 +100,11 @@ struct State {
     size: winit::dpi::PhysicalSize<u32>,
     surface: wgpu::Surface<'static>,
     surface_format: wgpu::TextureFormat,
+    vertex_buffer: wgpu::Buffer,
+    uniform_buffer: wgpu::Buffer,
+    uniform_bind_group: wgpu::BindGroup,
+    render_pipeline: wgpu::RenderPipeline,
+    start_time: Instant,
 }
 
 impl State {
@@ -37,6 +127,86 @@ impl State {
         let cap = surface.get_capabilities(&adapter);
         let surface_format = cap.formats[0];
 
+        // Create vertex buffer
+        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Vertex Buffer"),
+            contents: bytemuck::cast_slice(VERTICES),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+
+        // Create uniform buffer
+        let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Uniform Buffer"),
+            contents: bytemuck::cast_slice(&[Uniforms {
+                rotation: cgmath::Matrix4::<f32>::identity().into(),
+            }]),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+
+        // Create bind group layout and bind group
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Uniform Bind Group Layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+
+        let uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Uniform Bind Group"),
+            layout: &bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: uniform_buffer.as_entire_binding(),
+            }],
+        });
+
+        // Create shader module
+        let shader_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Shader"),
+            source: wgpu::ShaderSource::Wgsl(SHADER_SRC.into()),
+        });
+
+        // Create render pipeline
+        let render_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Render Pipeline Layout"),
+                bind_group_layouts: &[Some(&bind_group_layout)],
+                immediate_size: 0,
+            });
+
+        let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Render Pipeline"),
+            layout: Some(&render_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader_module,
+                entry_point: Some("vs_main"),
+                buffers: &[Some(Vertex::desc())],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader_module,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: surface_format.add_srgb_suffix(),
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+
         let state = State {
             instance,
             window,
@@ -45,6 +215,11 @@ impl State {
             size,
             surface,
             surface_format,
+            vertex_buffer,
+            uniform_buffer,
+            uniform_bind_group,
+            render_pipeline,
+            start_time: Instant::now(),
         };
 
         // Configure surface for the first time
@@ -81,6 +256,19 @@ impl State {
     }
 
     fn render(&mut self) {
+        // Calculate rotation based on elapsed time
+        let elapsed = self.start_time.elapsed().as_secs_f32();
+        let rotation_matrix = cgmath::Matrix4::from_angle_z(cgmath::Rad(elapsed));
+
+        // Update uniform buffer with new rotation matrix
+        self.queue.write_buffer(
+            &self.uniform_buffer,
+            0,
+            bytemuck::cast_slice(&[Uniforms {
+                rotation: rotation_matrix.into(),
+            }]),
+        );
+
         // Create texture view.
         // NOTE: We must handle Timeout because the surface may be unavailable
         // (e.g., when the window is occluded on macOS).
@@ -114,17 +302,17 @@ impl State {
                 ..Default::default()
             });
 
-        // Renders a GREEN screen
+        // Clear the screen and draw the triangle
         let mut encoder = self.device.create_command_encoder(&Default::default());
         // Create the renderpass which will clear the screen.
-        let renderpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        let mut renderpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: None,
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &texture_view,
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::GREEN),
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
                     store: wgpu::StoreOp::Store,
                 },
             })],
@@ -134,7 +322,11 @@ impl State {
             multiview_mask: None,
         });
 
-        // If you wanted to call any drawing commands, they would go here.
+        // Draw the triangle
+        renderpass.set_pipeline(&self.render_pipeline);
+        renderpass.set_bind_group(0, &self.uniform_bind_group, &[]);
+        renderpass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+        renderpass.draw(0..3, 0..1);
 
         // End the renderpass.
         drop(renderpass);

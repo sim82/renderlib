@@ -11,3 +11,4 @@ bytemuck = { version = "1.16", features = ["derive"] }
 anyhow = "1.0.104"
 thiserror = "2.0.19"
 env_logger = "0.11.11"
+cgmath = "0.18"
