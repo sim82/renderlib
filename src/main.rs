@@ -166,17 +166,16 @@ impl State {
             &[Some(&bind_group_layout)],
         );
 
-        let render_pipeline = create_render_pipeline(
-            device,
-            Some("Render Pipeline"),
-            Some(&render_pipeline_layout),
-            &shader_module,
-            Some("vs_main"),
-            Some("fs_main"),
-            &[Some(Vertex::desc())],
-            context.surface_format.add_srgb_suffix(),
-            wgpu::PrimitiveState::default(),
-        );
+        let render_pipeline = RenderPipelineBuilder::new(device)
+            .with_label(Some("Render Pipeline"))
+            .with_layout(Some(&render_pipeline_layout))
+            .with_shader_module(&shader_module)
+            .with_vertex_entry("vs_main")
+            .with_fragment_entry("fs_main")
+            .with_vertex_buffers(&[Some(Vertex::desc())])
+            .with_color_format(context.surface_format.add_srgb_suffix())
+            .with_primitive(wgpu::PrimitiveState::default())
+            .build();
 
         let render_state = RenderState {
             vertex_buffer,
@@ -323,7 +322,7 @@ fn main() {
     event_loop.set_control_flow(ControlFlow::Poll);
 
     // When the current loop iteration finishes, suspend the thread until
-    // another event arrives. Helps keeping CPU utilization low if nothing
+    // another event arrives. Helps keeping CPU utilization low if
     // is happening, which is preferred if the application might be idling in
     // the background.
     // event_loop.set_control_flow(ControlFlow::Wait);
