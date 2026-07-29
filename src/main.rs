@@ -2,7 +2,6 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use cgmath::SquareMatrix;
-use wgpu::util::DeviceExt;
 
 use winit::{
     application::ApplicationHandler,
@@ -10,6 +9,9 @@ use winit::{
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop, OwnedDisplayHandle},
     window::{Window, WindowId},
 };
+
+mod device_helpers;
+use device_helpers::*;
 
 // Vertex data for a triangle
 #[repr(C)]
@@ -61,7 +63,6 @@ const VERTICES: &[Vertex] = &[
 struct Uniforms {
     rotation: [[f32; 4]; 4],
 }
-
 const SHADER_SRC: &str = r#"
     struct Uniforms {
         rotation: mat4x4<f32>,
@@ -131,85 +132,60 @@ impl State {
         let cap = surface.get_capabilities(&adapter);
         let surface_format = cap.formats[0];
 
-        // Create vertex buffer
-        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Vertex Buffer"),
-            contents: bytemuck::cast_slice(VERTICES),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
+        // Create vertex buffer from slice
+        let vertex_buffer = create_buffer_from_slice(
+            &device,
+            Some("Vertex Buffer"),
+            VERTICES,
+            wgpu::BufferUsages::VERTEX,
+        );
 
-        // Create uniform buffer
-        let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Uniform Buffer"),
-            contents: bytemuck::cast_slice(&[Uniforms {
-                rotation: cgmath::Matrix4::<f32>::identity().into(),
-            }]),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
+        // Create uniform buffer from single struct
+        let uniform_init = Uniforms {
+            rotation: cgmath::Matrix4::<f32>::identity().into(),
+        };
+        let uniform_buffer = create_buffer(
+            &device,
+            Some("Uniform Buffer"),
+            &uniform_init,
+            wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        );
 
-        // Create bind group layout and bind group
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Uniform Bind Group Layout"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
-        });
+        // Create bind group layout and bind group using helpers
+        let bind_group_layout = create_uniform_bind_group_layout(
+            &device,
+            Some("Uniform Bind Group Layout"),
+            wgpu::ShaderStages::VERTEX,
+        );
 
-        let uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Uniform Bind Group"),
-            layout: &bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: uniform_buffer.as_entire_binding(),
-            }],
-        });
+        let uniform_bind_group = create_uniform_bind_group(
+            &device,
+            Some("Uniform Bind Group"),
+            &bind_group_layout,
+            &uniform_buffer,
+        );
 
-        // Create shader module
-        let shader_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Shader"),
-            source: wgpu::ShaderSource::Wgsl(SHADER_SRC.into()),
-        });
+        // Create shader module using helper
+        let shader_module = create_shader_module(&device, Some("Shader"), SHADER_SRC);
 
-        // Create render pipeline
-        let render_pipeline_layout =
-            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("Render Pipeline Layout"),
-                bind_group_layouts: &[Some(&bind_group_layout)],
-                immediate_size: 0,
-            });
+        // Create render pipeline using helpers
+        let render_pipeline_layout = create_pipeline_layout(
+            &device,
+            Some("Render Pipeline Layout"),
+            &[Some(&bind_group_layout)],
+        );
 
-        let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Render Pipeline"),
-            layout: Some(&render_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader_module,
-                entry_point: Some("vs_main"),
-                buffers: &[Some(Vertex::desc())],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader_module,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: surface_format.add_srgb_suffix(),
-                    blend: Some(wgpu::BlendState::REPLACE),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
+        let render_pipeline = create_render_pipeline(
+            &device,
+            Some("Render Pipeline"),
+            Some(&render_pipeline_layout),
+            &shader_module,
+            Some("vs_main"),
+            Some("fs_main"),
+            &[Some(Vertex::desc())],
+            surface_format.add_srgb_suffix(),
+            wgpu::PrimitiveState::default(),
+        );
 
         let state = State {
             instance,
