@@ -39,7 +39,7 @@ impl GraphicsContext {
         let cap = surface.get_capabilities(&adapter);
         let surface_format = cap.formats[0];
 
-        let mut context = GraphicsContext {
+        let context = GraphicsContext {
             window: window.clone(),
             instance,
             device,
@@ -81,16 +81,6 @@ impl GraphicsContext {
     /// Get a reference to the window.
     pub fn window(&self) -> &Window {
         &self.window
-    }
-
-    /// Request a redraw of the window.
-    pub fn request_redraw(&self) {
-        self.window.request_redraw();
-    }
-
-    /// Notify the window before presenting.
-    pub fn pre_present_notify(&self) {
-        self.window.pre_present_notify();
     }
 
     /// Try to acquire the current surface texture for rendering.
