@@ -10,7 +10,10 @@ use winit::{
     window::{Window, WindowId},
 };
 
+mod context;
 mod device_helpers;
+
+use context::GraphicsContext;
 use device_helpers::*;
 
 // Vertex data for a triangle
@@ -97,14 +100,8 @@ const SHADER_SRC: &str = r#"
     }
 "#;
 
-struct State {
-    instance: wgpu::Instance,
-    window: Arc<Window>,
-    device: wgpu::Device,
-    queue: wgpu::Queue,
-    size: winit::dpi::PhysicalSize<u32>,
-    surface: wgpu::Surface<'static>,
-    surface_format: wgpu::TextureFormat,
+/// Application-specific rendering state (separate from graphics context)
+struct RenderState {
     vertex_buffer: wgpu::Buffer,
     uniform_buffer: wgpu::Buffer,
     uniform_bind_group: wgpu::BindGroup,
@@ -112,29 +109,23 @@ struct State {
     start_time: Instant,
 }
 
+/// Application state combining graphics context with rendering state
+struct State {
+    context: GraphicsContext,
+    render_state: RenderState,
+}
+
 impl State {
     async fn new(display: OwnedDisplayHandle, window: Arc<Window>) -> State {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_with_display_handle(
-            Box::new(display),
-        ));
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions::default())
-            .await
-            .unwrap();
-        let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor::default())
-            .await
-            .unwrap();
+        // Create graphics context
+        let context = GraphicsContext::new(display, window.clone()).await;
 
-        let size = window.inner_size();
-
-        let surface = instance.create_surface(window.clone()).unwrap();
-        let cap = surface.get_capabilities(&adapter);
-        let surface_format = cap.formats[0];
+        // Create rendering resources using the context's device
+        let device = &context.device;
 
         // Create vertex buffer from slice
         let vertex_buffer = create_buffer_from_slice(
-            &device,
+            device,
             Some("Vertex Buffer"),
             VERTICES,
             wgpu::BufferUsages::VERTEX,
@@ -145,7 +136,7 @@ impl State {
             rotation: cgmath::Matrix4::<f32>::identity().into(),
         };
         let uniform_buffer = create_buffer(
-            &device,
+            device,
             Some("Uniform Buffer"),
             &uniform_init,
             wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
@@ -153,48 +144,41 @@ impl State {
 
         // Create bind group layout and bind group using helpers
         let bind_group_layout = create_uniform_bind_group_layout(
-            &device,
+            device,
             Some("Uniform Bind Group Layout"),
             wgpu::ShaderStages::VERTEX,
         );
 
         let uniform_bind_group = create_uniform_bind_group(
-            &device,
+            device,
             Some("Uniform Bind Group"),
             &bind_group_layout,
             &uniform_buffer,
         );
 
         // Create shader module using helper
-        let shader_module = create_shader_module(&device, Some("Shader"), SHADER_SRC);
+        let shader_module = create_shader_module(device, Some("Shader"), SHADER_SRC);
 
         // Create render pipeline using helpers
         let render_pipeline_layout = create_pipeline_layout(
-            &device,
+            device,
             Some("Render Pipeline Layout"),
             &[Some(&bind_group_layout)],
         );
 
         let render_pipeline = create_render_pipeline(
-            &device,
+            device,
             Some("Render Pipeline"),
             Some(&render_pipeline_layout),
             &shader_module,
             Some("vs_main"),
             Some("fs_main"),
             &[Some(Vertex::desc())],
-            surface_format.add_srgb_suffix(),
+            context.surface_format.add_srgb_suffix(),
             wgpu::PrimitiveState::default(),
         );
 
-        let state = State {
-            instance,
-            window,
-            device,
-            queue,
-            size,
-            surface,
-            surface_format,
+        let render_state = RenderState {
             vertex_buffer,
             uniform_buffer,
             uniform_bind_group,
@@ -202,88 +186,48 @@ impl State {
             start_time: Instant::now(),
         };
 
-        // Configure surface for the first time
-        state.configure_surface();
-
-        state
+        State {
+            context,
+            render_state,
+        }
     }
 
     fn get_window(&self) -> &Window {
-        &self.window
-    }
-
-    fn configure_surface(&self) {
-        let surface_config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format: self.surface_format,
-            color_space: wgpu::SurfaceColorSpace::Auto,
-            // Request compatibility with the sRGB-format texture view we‘re going to create later.
-            view_formats: vec![self.surface_format.add_srgb_suffix()],
-            alpha_mode: wgpu::CompositeAlphaMode::Auto,
-            width: self.size.width,
-            height: self.size.height,
-            desired_maximum_frame_latency: 2,
-            present_mode: wgpu::PresentMode::AutoVsync,
-        };
-        self.surface.configure(&self.device, &surface_config);
+        self.context.window()
     }
 
     fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
-        self.size = new_size;
+        self.context.resize(new_size);
 
-        // reconfigure the surface
-        self.configure_surface();
+        self.context.configure_surface();
     }
 
     fn render(&mut self) {
         // Calculate rotation based on elapsed time
-        let elapsed = self.start_time.elapsed().as_secs_f32();
+        let elapsed = self.render_state.start_time.elapsed().as_secs_f32();
         let rotation_matrix = cgmath::Matrix4::from_angle_z(cgmath::Rad(elapsed));
 
         // Update uniform buffer with new rotation matrix
-        self.queue.write_buffer(
-            &self.uniform_buffer,
+        self.context.queue.write_buffer(
+            &self.render_state.uniform_buffer,
             0,
             bytemuck::cast_slice(&[Uniforms {
                 rotation: rotation_matrix.into(),
             }]),
         );
 
-        // Create texture view.
-        // NOTE: We must handle Timeout because the surface may be unavailable
-        // (e.g., when the window is occluded on macOS).
-        let surface_texture = match self.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(texture) => texture,
-            wgpu::CurrentSurfaceTexture::Occluded | wgpu::CurrentSurfaceTexture::Timeout => return,
-            wgpu::CurrentSurfaceTexture::Suboptimal(texture) => {
-                drop(texture);
-                self.configure_surface();
-                return;
-            }
-            wgpu::CurrentSurfaceTexture::Outdated => {
-                self.configure_surface();
-                return;
-            }
-            wgpu::CurrentSurfaceTexture::Validation => {
-                unreachable!("No error scope registered, so validation errors will panic")
-            }
-            wgpu::CurrentSurfaceTexture::Lost => {
-                self.surface = self.instance.create_surface(self.window.clone()).unwrap();
-                self.configure_surface();
-                return;
-            }
+        // Get current surface texture and view from context
+        let surface_texture = match self.context.get_current_texture() {
+            Some(texture) => texture,
+            None => return,
         };
-        let texture_view = surface_texture
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor {
-                // Without add_srgb_suffix() the image we will be working with
-                // might not be "gamma correct".
-                format: Some(self.surface_format.add_srgb_suffix()),
-                ..Default::default()
-            });
+        let texture_view = self.context.create_texture_view(&surface_texture);
 
         // Clear the screen and draw the triangle
-        let mut encoder = self.device.create_command_encoder(&Default::default());
+        let mut encoder = self
+            .context
+            .device
+            .create_command_encoder(&Default::default());
         // Create the renderpass which will clear the screen.
         let mut renderpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: None,
@@ -303,18 +247,18 @@ impl State {
         });
 
         // Draw the triangle
-        renderpass.set_pipeline(&self.render_pipeline);
-        renderpass.set_bind_group(0, &self.uniform_bind_group, &[]);
-        renderpass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+        renderpass.set_pipeline(&self.render_state.render_pipeline);
+        renderpass.set_bind_group(0, &self.render_state.uniform_bind_group, &[]);
+        renderpass.set_vertex_buffer(0, self.render_state.vertex_buffer.slice(..));
         renderpass.draw(0..3, 0..1);
 
         // End the renderpass.
         drop(renderpass);
 
         // Submit the command in the queue to execute
-        self.queue.submit([encoder.finish()]);
-        self.window.pre_present_notify();
-        self.queue.present(surface_texture);
+        self.context.queue.submit([encoder.finish()]);
+        self.context.window().pre_present_notify();
+        self.context.queue.present(surface_texture);
     }
 }
 
