@@ -78,11 +78,6 @@ impl GraphicsContext {
         self.configure_surface();
     }
 
-    /// Get a reference to the window.
-    pub fn window(&self) -> &Window {
-        &self.window
-    }
-
     /// Try to acquire the current surface texture for rendering.
     /// Returns Some(texture) on success, None if surface is unavailable.
     /// Handles Suboptimal, Outdated, and Lost cases by reconfiguring or recreating.
@@ -119,5 +114,15 @@ impl GraphicsContext {
                 format: Some(self.surface_format.add_srgb_suffix()),
                 ..Default::default()
             })
+    }
+
+    /// Request a redraw of the window.
+    pub fn request_redraw(&self) {
+        self.window.request_redraw();
+    }
+
+    /// Notify the window before presenting.
+    pub fn pre_present_notify(&self) {
+        self.window.pre_present_notify();
     }
 }
