@@ -1,16 +1,16 @@
-//! Demo module - contains the rotating triangle renderer.
+//! Self-contained triangle demo binary.
 //!
-//! This is an example renderer that demonstrates basic wgpu rendering.
+//! This example demonstrates a rotating triangle using the renderlib framework.
 
 use std::time::Instant;
 
 use cgmath::SquareMatrix;
-
 use wgpu::VertexBufferLayout;
+use winit::event_loop::EventLoop;
 
-use crate::app::AppRenderer;
-use crate::context::GraphicsContext;
-use crate::device_helpers::*;
+use renderlib::app::{App, AppRenderer};
+use renderlib::context::GraphicsContext;
+use renderlib::device_helpers::*;
 
 /// Vertex data for a triangle with position and color.
 #[repr(C)]
@@ -101,7 +101,7 @@ const VERTICES: &[Vertex] = &[
 ];
 
 /// Renderer for the rotating triangle demo.
-pub struct DemoRenderer {
+pub struct TriangleRenderer {
     vertex_buffer: wgpu::Buffer,
     uniform_buffer: wgpu::Buffer,
     uniform_bind_group: wgpu::BindGroup,
@@ -109,7 +109,7 @@ pub struct DemoRenderer {
     start_time: Instant,
 }
 
-impl AppRenderer for DemoRenderer {
+impl AppRenderer for TriangleRenderer {
     async fn init(context: &GraphicsContext) -> Self {
         let device = &context.device;
 
@@ -167,7 +167,7 @@ impl AppRenderer for DemoRenderer {
             .with_primitive(wgpu::PrimitiveState::default())
             .build();
 
-        DemoRenderer {
+        TriangleRenderer {
             vertex_buffer,
             uniform_buffer,
             uniform_bind_group,
@@ -235,4 +235,17 @@ impl AppRenderer for DemoRenderer {
     fn resize(&mut self, _context: &mut GraphicsContext, _new_size: winit::dpi::PhysicalSize<u32>) {
         // Demo doesn't need special resize handling beyond what GraphicsContext does
     }
+}
+
+fn main() {
+    // Initialize logger
+    env_logger::init();
+
+    let event_loop = EventLoop::new().unwrap();
+
+    // Use Poll control flow for games that want to render as fast as possible
+    event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
+
+    let mut app = App::<TriangleRenderer>::new();
+    event_loop.run_app(&mut app).unwrap();
 }
