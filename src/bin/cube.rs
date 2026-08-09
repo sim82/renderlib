@@ -10,48 +10,12 @@
 use std::time::Instant;
 
 use cgmath::{perspective, Deg, Matrix4, Point3, Rad, SquareMatrix, Vector3};
-use wgpu::VertexBufferLayout;
 use winit::event_loop::EventLoop;
 
 use renderlib::app::{App, AppRenderer};
 use renderlib::context::GraphicsContext;
 use renderlib::device_helpers::*;
-
-/// Vertex data for a 3D cube with position, color, and normal.
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct Vertex {
-    pub position: [f32; 3],
-    pub color: [f32; 3],
-    pub normal: [f32; 3],
-}
-
-impl Vertex {
-    /// Get the vertex buffer layout description for this vertex type.
-    pub fn desc() -> VertexBufferLayout<'static> {
-        wgpu::VertexBufferLayout {
-            array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &[
-                wgpu::VertexAttribute {
-                    offset: 0,
-                    shader_location: 0,
-                    format: wgpu::VertexFormat::Float32x3,
-                },
-                wgpu::VertexAttribute {
-                    offset: std::mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
-                    shader_location: 1,
-                    format: wgpu::VertexFormat::Float32x3,
-                },
-                wgpu::VertexAttribute {
-                    offset: (std::mem::size_of::<[f32; 3]>() * 2) as wgpu::BufferAddress,
-                    shader_location: 2,
-                    format: wgpu::VertexFormat::Float32x3,
-                },
-            ],
-        }
-    }
-}
+use renderlib::geometry::{primitives, PosColorNormalVertex};
 
 /// Uniform data containing the model-view-projection matrix, model matrix, and light position.
 #[repr(C)]
@@ -110,124 +74,18 @@ const SHADER_SRC: &str = r#"
         // Calculate lighting
         let light_dir = normalize(uniforms.light_pos - in.world_pos);
         let normal = normalize(in.normal);
-
+        
         // Diffuse lighting factor (dot product of normal and light direction)
         let diffuse = max(dot(normal, light_dir), 0.0);
-
+        
         // Ambient + diffuse lighting
         let ambient = 0.2;
         let lighting = ambient + diffuse * 0.8;
-
+        
         // Apply lighting to the face color
         return vec4<f32>(in.color * lighting, 1.0);
     }
 "#;
-
-/// Define the 8 vertices of a cube centered at origin with side length 2.
-/// Each face has a different color and proper normals.
-fn create_cube_vertices() -> (Vec<Vertex>, Vec<u16>) {
-    // Define the 8 corner positions
-    let positions = [
-        // Front face (z = 1)
-        [-1.0, -1.0, 1.0], // 0
-        [1.0, -1.0, 1.0],  // 1
-        [1.0, 1.0, 1.0],   // 2
-        [-1.0, 1.0, 1.0],  // 3
-        // Back face (z = -1)
-        [-1.0, -1.0, -1.0], // 4
-        [1.0, -1.0, -1.0],  // 5
-        [1.0, 1.0, -1.0],   // 6
-        [-1.0, 1.0, -1.0],  // 7
-    ];
-
-    // Define face normals (pointing outward)
-    let face_normals = [
-        [0.0, 0.0, 1.0],  // Front face - Z+
-        [0.0, 0.0, -1.0], // Back face - Z-
-        [1.0, 0.0, 0.0],  // Right face - X+
-        [-1.0, 0.0, 0.0], // Left face - X-
-        [0.0, 1.0, 0.0],  // Top face - Y+
-        [0.0, -1.0, 0.0], // Bottom face - Y-
-    ];
-
-    // Define colors for each face
-    let face_colors = [
-        [1.0, 0.0, 0.0], // Front - Red
-        [0.0, 1.0, 0.0], // Back - Green
-        [0.0, 0.0, 1.0], // Right - Blue
-        [1.0, 1.0, 0.0], // Left - Yellow
-        [1.0, 0.0, 1.0], // Top - Magenta
-        [0.0, 1.0, 1.0], // Bottom - Cyan
-    ];
-
-    // Build vertices with colors and normals assigned per face
-    let mut vertices = Vec::new();
-
-    // Front face (z = 1)
-    for &pos_idx in &[0, 1, 2, 3] {
-        vertices.push(Vertex {
-            position: positions[pos_idx],
-            color: face_colors[0],
-            normal: face_normals[0],
-        });
-    }
-    // Back face (z = -1) - note: vertex order reversed for correct normal orientation
-    for &pos_idx in &[5, 4, 7, 6] {
-        vertices.push(Vertex {
-            position: positions[pos_idx],
-            color: face_colors[1],
-            normal: face_normals[1],
-        });
-    }
-    // Right face (x = 1)
-    for &pos_idx in &[1, 5, 6, 2] {
-        vertices.push(Vertex {
-            position: positions[pos_idx],
-            color: face_colors[2],
-            normal: face_normals[2],
-        });
-    }
-    // Left face (x = -1) - note: vertex order reversed
-    for &pos_idx in &[4, 0, 3, 7] {
-        vertices.push(Vertex {
-            position: positions[pos_idx],
-            color: face_colors[3],
-            normal: face_normals[3],
-        });
-    }
-    // Top face (y = 1)
-    for &pos_idx in &[3, 2, 6, 7] {
-        vertices.push(Vertex {
-            position: positions[pos_idx],
-            color: face_colors[4],
-            normal: face_normals[4],
-        });
-    }
-    // Bottom face (y = -1) - note: vertex order reversed
-    for &pos_idx in &[0, 4, 5, 1] {
-        vertices.push(Vertex {
-            position: positions[pos_idx],
-            color: face_colors[5],
-            normal: face_normals[5],
-        });
-    }
-
-    // Indices for each face (2 triangles per face, 6 faces = 36 indices)
-    let mut indices = Vec::new();
-    for face_offset in 0..6 {
-        let base = face_offset * 4;
-        // First triangle
-        indices.push(base as u16);
-        indices.push((base + 1) as u16);
-        indices.push((base + 2) as u16);
-        // Second triangle
-        indices.push(base as u16);
-        indices.push((base + 2) as u16);
-        indices.push((base + 3) as u16);
-    }
-
-    (vertices, indices)
-}
 
 /// Renderer for the 3D spinning cube demo with lighting.
 pub struct CubeRenderer {
@@ -243,8 +101,8 @@ impl AppRenderer for CubeRenderer {
     async fn init(context: &GraphicsContext) -> Self {
         let device = &context.device;
 
-        // Create cube vertices and indices
-        let (vertices, indices) = create_cube_vertices();
+        // Get cube vertices and indices from framework primitives
+        let (vertices, indices) = primitives::cube_vertices();
 
         // Create vertex buffer
         let vertex_buffer = create_buffer_from_slice(
@@ -317,7 +175,7 @@ impl AppRenderer for CubeRenderer {
             .with_shader_module(&shader_module)
             .with_vertex_entry("vs_main")
             .with_fragment_entry("fs_main")
-            .with_vertex_buffers(&[Some(Vertex::desc())])
+            .with_vertex_buffers(&[Some(PosColorNormalVertex::desc())])
             .with_color_format(context.surface_format.add_srgb_suffix())
             .with_primitive(wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,

@@ -1,0 +1,103 @@
+//! Geometry module - provides common vertex types and mesh data structures.
+//!
+//! This module contains pre-defined vertex types with standard layouts for common
+//! rendering scenarios, reducing boilerplate in application code.
+
+use wgpu::VertexBufferLayout;
+
+// Submodules
+pub mod primitives;
+
+/// Vertex with position and color attributes.
+/// 
+/// Use case: Simple 2D/3D rendering without lighting (colored geometry).
+/// 
+/// - `position` at shader location 0
+/// - `color` at shader location 1
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct PosColorVertex {
+    pub position: [f32; 3],
+    pub color: [f32; 3],
+}
+
+impl PosColorVertex {
+    /// Returns the vertex buffer layout for this vertex type.
+    pub fn desc() -> VertexBufferLayout<'static> {
+        VertexBufferLayout {
+            array_stride: std::mem::size_of::<Self>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[
+                wgpu::VertexAttribute {
+                    offset: 0,
+                    shader_location: 0,
+                    format: wgpu::VertexFormat::Float32x3,
+                },
+                wgpu::VertexAttribute {
+                    offset: std::mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
+                    shader_location: 1,
+                    format: wgpu::VertexFormat::Float32x3,
+                },
+            ],
+        }
+    }
+}
+
+/// Vertex with position, color, and normal attributes.
+/// 
+/// Use case: 3D rendering with lighting (per-vertex normals for diffuse lighting).
+/// 
+/// - `position` at shader location 0
+/// - `color` at shader location 1
+/// - `normal` at shader location 2
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct PosColorNormalVertex {
+    pub position: [f32; 3],
+    pub color: [f32; 3],
+    pub normal: [f32; 3],
+}
+
+impl PosColorNormalVertex {
+    /// Returns the vertex buffer layout for this vertex type.
+    pub fn desc() -> VertexBufferLayout<'static> {
+        VertexBufferLayout {
+            array_stride: std::mem::size_of::<Self>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[
+                wgpu::VertexAttribute {
+                    offset: 0,
+                    shader_location: 0,
+                    format: wgpu::VertexFormat::Float32x3,
+                },
+                wgpu::VertexAttribute {
+                    offset: std::mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
+                    shader_location: 1,
+                    format: wgpu::VertexFormat::Float32x3,
+                },
+                wgpu::VertexAttribute {
+                    offset: (std::mem::size_of::<[f32; 3]>() * 2) as wgpu::BufferAddress,
+                    shader_location: 2,
+                    format: wgpu::VertexFormat::Float32x3,
+                },
+            ],
+        }
+    }
+}
+
+/// Trait for vertex types that can provide their vertex buffer layout description.
+pub trait VertexLayout {
+    fn desc() -> VertexBufferLayout<'static>;
+}
+
+impl VertexLayout for PosColorVertex {
+    fn desc() -> VertexBufferLayout<'static> {
+        Self::desc()
+    }
+}
+
+impl VertexLayout for PosColorNormalVertex {
+    fn desc() -> VertexBufferLayout<'static> {
+        Self::desc()
+    }
+}

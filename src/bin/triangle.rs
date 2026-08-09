@@ -5,42 +5,12 @@
 use std::time::Instant;
 
 use cgmath::SquareMatrix;
-use wgpu::VertexBufferLayout;
 use winit::event_loop::EventLoop;
 
 use renderlib::app::{App, AppRenderer};
 use renderlib::context::GraphicsContext;
 use renderlib::device_helpers::*;
-
-/// Vertex data for a triangle with position and color.
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct Vertex {
-    pub position: [f32; 3],
-    pub color: [f32; 3],
-}
-
-impl Vertex {
-    /// Get the vertex buffer layout description for this vertex type.
-    pub fn desc() -> VertexBufferLayout<'static> {
-        wgpu::VertexBufferLayout {
-            array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &[
-                wgpu::VertexAttribute {
-                    offset: 0,
-                    shader_location: 0,
-                    format: wgpu::VertexFormat::Float32x3,
-                },
-                wgpu::VertexAttribute {
-                    offset: std::mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
-                    shader_location: 1,
-                    format: wgpu::VertexFormat::Float32x3,
-                },
-            ],
-        }
-    }
-}
+use renderlib::geometry::{primitives, PosColorVertex};
 
 /// Uniform data containing the rotation matrix.
 #[repr(C)]
@@ -84,22 +54,6 @@ const SHADER_SRC: &str = r#"
     }
 "#;
 
-/// Triangle vertices with red, green, blue colors.
-const VERTICES: &[Vertex] = &[
-    Vertex {
-        position: [0.0, 0.5, 0.0],
-        color: [1.0, 0.0, 0.0],
-    },
-    Vertex {
-        position: [-0.5, -0.5, 0.0],
-        color: [0.0, 1.0, 0.0],
-    },
-    Vertex {
-        position: [0.5, -0.5, 0.0],
-        color: [0.0, 0.0, 1.0],
-    },
-];
-
 /// Renderer for the rotating triangle demo.
 pub struct TriangleRenderer {
     vertex_buffer: wgpu::Buffer,
@@ -113,11 +67,11 @@ impl AppRenderer for TriangleRenderer {
     async fn init(context: &GraphicsContext) -> Self {
         let device = &context.device;
 
-        // Create vertex buffer from slice
+        // Create vertex buffer from framework primitive
         let vertex_buffer = create_buffer_from_slice(
             device,
             Some("Vertex Buffer"),
-            VERTICES,
+            primitives::triangle_vertices(),
             wgpu::BufferUsages::VERTEX,
         );
 
@@ -162,7 +116,7 @@ impl AppRenderer for TriangleRenderer {
             .with_shader_module(&shader_module)
             .with_vertex_entry("vs_main")
             .with_fragment_entry("fs_main")
-            .with_vertex_buffers(&[Some(Vertex::desc())])
+            .with_vertex_buffers(&[Some(PosColorVertex::desc())])
             .with_color_format(context.surface_format.add_srgb_suffix())
             .with_primitive(wgpu::PrimitiveState::default())
             .build();

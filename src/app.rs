@@ -18,7 +18,7 @@ use crate::context::GraphicsContext;
 /// Implement this trait to create custom renderers that work with the application framework.
 pub trait AppRenderer: Sized {
     /// Initialize rendering resources asynchronously.
-    async fn init(context: &GraphicsContext) -> Self;
+    fn init(context: &GraphicsContext) -> impl std::future::Future<Output = Self>;
 
     /// Called when the window needs to be redrawn.
     fn render(&mut self, context: &mut GraphicsContext);
@@ -40,6 +40,12 @@ impl<R: AppRenderer> App<R> {
             context: None,
             renderer: None,
         }
+    }
+}
+
+impl<R: AppRenderer> Default for App<R> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
