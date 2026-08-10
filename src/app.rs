@@ -25,6 +25,10 @@ pub trait AppRenderer: Sized {
 
     /// Called on window resize (after the surface has been reconfigured).
     fn resize(&mut self, context: &mut GraphicsContext, new_size: winit::dpi::PhysicalSize<u32>);
+
+    /// Called when an input event occurs (e.g., key press).
+    /// Default implementation does nothing.
+    fn input(&mut self, _event: &WindowEvent) {}
 }
 
 /// Main application struct that handles the event loop and manages the graphics context.
@@ -76,6 +80,9 @@ impl<R: AppRenderer + 'static> ApplicationHandler for App<R> {
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         let context = self.context.as_mut().expect("Context not initialized");
         let renderer = self.renderer.as_mut().expect("Renderer not initialized");
+
+        // Forward input events to renderer
+        renderer.input(&event);
 
         match event {
             WindowEvent::CloseRequested => {

@@ -48,7 +48,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let diffuse = max(dot(normal, light_dir), 0.0);
 
     // Ambient + diffuse lighting
-    let ambient = 0.2;
+    let ambient = 0.1;
     let lighting = ambient + diffuse * 0.8;
 
     // Apply lighting to the face color

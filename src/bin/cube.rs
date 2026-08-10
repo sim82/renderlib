@@ -6,19 +6,23 @@
 //! - Colored faces
 //! - Simple fake lighting (pseudo light source at camera position)
 //! - Smooth rotation on multiple axes
+//!
+//! Press R to reload shaders.
 
 use std::time::Instant;
 
 use cgmath::{perspective, Deg, Matrix4, Point3, Rad, SquareMatrix, Vector3};
+use winit::event::WindowEvent;
 use winit::event_loop::EventLoop;
+use winit::keyboard::Key;
 
 use renderlib::app::{App, AppRenderer};
 use renderlib::context::GraphicsContext;
 use renderlib::device_helpers::*;
 use renderlib::geometry::{primitives, PosColorNormalVertex};
 
-/// Shader source loaded from external WGSL file.
-const SHADER_SRC: &str = include_str!("../shaders/cube.wgsl");
+/// Path to the shader file.
+const SHADER_PATH: &str = "src/shaders/cube.wgsl";
 
 /// Uniform data containing the model-view-projection matrix, model matrix, and light position.
 #[repr(C)]
@@ -37,7 +41,57 @@ pub struct CubeRenderer {
     uniform_buffer: wgpu::Buffer,
     uniform_bind_group: wgpu::BindGroup,
     render_pipeline: wgpu::RenderPipeline,
+    bind_group_layout: wgpu::BindGroupLayout,
+    surface_format: wgpu::TextureFormat,
+    should_reload: bool,
     start_time: Instant,
+}
+
+impl CubeRenderer {
+    /// Creates the render pipeline from the shader file.
+    fn create_pipeline(
+        device: &wgpu::Device,
+        bind_group_layout: &wgpu::BindGroupLayout,
+        surface_format: wgpu::TextureFormat,
+    ) -> Result<wgpu::RenderPipeline, String> {
+        let shader_src = std::fs::read_to_string(SHADER_PATH)
+            .map_err(|e| format!("Failed to read shader file: {}", e))?;
+
+        let shader_module = create_shader_module(device, Some("Cube Shader"), &shader_src);
+
+        let render_pipeline_layout = create_pipeline_layout(
+            device,
+            Some("Cube Render Pipeline Layout"),
+            &[Some(bind_group_layout)],
+        );
+
+        let pipeline = RenderPipelineBuilder::new(device)
+            .with_label(Some("Cube Render Pipeline"))
+            .with_layout(Some(&render_pipeline_layout))
+            .with_shader_module(&shader_module)
+            .with_vertex_entry("vs_main")
+            .with_fragment_entry("fs_main")
+            .with_vertex_buffers(&[Some(PosColorNormalVertex::desc())])
+            .with_color_format(surface_format.add_srgb_suffix())
+            .with_primitive(wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: Some(wgpu::Face::Back),
+                ..Default::default()
+            })
+            .build();
+
+        Ok(pipeline)
+    }
+
+    /// Reloads the shader from disk and recreates the pipeline.
+    pub fn reload_shader(&mut self, device: &wgpu::Device) -> Result<(), String> {
+        self.render_pipeline =
+            Self::create_pipeline(device, &self.bind_group_layout, self.surface_format)?;
+        self.should_reload = false;
+        Ok(())
+    }
 }
 
 impl AppRenderer for CubeRenderer {
@@ -101,33 +155,10 @@ impl AppRenderer for CubeRenderer {
             }],
         });
 
-        // Create shader module from external file
-        let shader_module = create_shader_module(device, Some("Cube Shader"), SHADER_SRC);
-
-        // Create render pipeline layout
-        let render_pipeline_layout = create_pipeline_layout(
-            device,
-            Some("Cube Render Pipeline Layout"),
-            &[Some(&bind_group_layout)],
-        );
-
-        // Create render pipeline with back-face culling
-        let render_pipeline = RenderPipelineBuilder::new(device)
-            .with_label(Some("Cube Render Pipeline"))
-            .with_layout(Some(&render_pipeline_layout))
-            .with_shader_module(&shader_module)
-            .with_vertex_entry("vs_main")
-            .with_fragment_entry("fs_main")
-            .with_vertex_buffers(&[Some(PosColorNormalVertex::desc())])
-            .with_color_format(context.surface_format.add_srgb_suffix())
-            .with_primitive(wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: Some(wgpu::Face::Back),
-                ..Default::default()
-            })
-            .build();
+        // Create initial pipeline
+        let render_pipeline =
+            Self::create_pipeline(device, &bind_group_layout, context.surface_format)
+                .expect("Failed to create initial pipeline");
 
         CubeRenderer {
             vertex_buffer,
@@ -135,11 +166,24 @@ impl AppRenderer for CubeRenderer {
             uniform_buffer,
             uniform_bind_group,
             render_pipeline,
+            bind_group_layout,
+            surface_format: context.surface_format,
+            should_reload: false,
             start_time: Instant::now(),
         }
     }
 
     fn render(&mut self, context: &mut GraphicsContext) {
+        // Reload shader if requested
+        if self.should_reload {
+            eprintln!("Reloading cube shader...");
+            if let Err(e) = self.reload_shader(&context.device) {
+                eprintln!("Shader reload failed: {}", e);
+            } else {
+                eprintln!("Cube shader reloaded successfully!");
+            }
+        }
+
         // Calculate MVP and model matrices
         let elapsed = self.start_time.elapsed().as_secs_f32();
 
@@ -225,6 +269,20 @@ impl AppRenderer for CubeRenderer {
 
     fn resize(&mut self, _context: &mut GraphicsContext, _new_size: winit::dpi::PhysicalSize<u32>) {
         // Resize is handled by the aspect ratio in the projection matrix
+    }
+
+    fn input(&mut self, event: &WindowEvent) {
+        if let WindowEvent::KeyboardInput {
+            event: key_event, ..
+        } = event
+        {
+            // Check for R key (case-insensitive) - set flag for reload in render
+            if let Key::Character(c) = &key_event.logical_key {
+                if c.to_ascii_lowercase() == "r" && key_event.state.is_pressed() {
+                    self.should_reload = true;
+                }
+            }
+        }
     }
 }
 
