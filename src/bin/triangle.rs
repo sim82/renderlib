@@ -12,47 +12,15 @@ use renderlib::context::GraphicsContext;
 use renderlib::device_helpers::*;
 use renderlib::geometry::{primitives, PosColorVertex};
 
+/// Shader source loaded from external WGSL file.
+const SHADER_SRC: &str = include_str!("../shaders/triangle.wgsl");
+
 /// Uniform data containing the rotation matrix.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Uniforms {
     pub rotation: [[f32; 4]; 4],
 }
-
-/// WGSL shader source for the rotating triangle.
-const SHADER_SRC: &str = r#"
-    struct Uniforms {
-        rotation: mat4x4<f32>,
-    };
-
-    struct VertexInput {
-        @location(0) position: vec3<f32>,
-        @location(1) color: vec3<f32>,
-    };
-
-    struct VertexOutput {
-        @builtin(position) clip_position: vec4<f32>,
-        @location(0) color: vec3<f32>,
-    };
-
-    @group(0) @binding(0)
-    var<uniform> uniforms: Uniforms;
-
-    @vertex
-    fn vs_main(
-        model: VertexInput,
-    ) -> VertexOutput {
-        var out: VertexOutput;
-        out.clip_position = uniforms.rotation * vec4<f32>(model.position, 1.0);
-        out.color = model.color;
-        return out;
-    }
-
-    @fragment
-    fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-        return vec4<f32>(in.color, 1.0);
-    }
-"#;
 
 /// Renderer for the rotating triangle demo.
 pub struct TriangleRenderer {
@@ -100,8 +68,8 @@ impl AppRenderer for TriangleRenderer {
             &uniform_buffer,
         );
 
-        // Create shader module using helper
-        let shader_module = create_shader_module(device, Some("Shader"), SHADER_SRC);
+        // Create shader module from external file
+        let shader_module = create_shader_module(device, Some("Triangle Shader"), SHADER_SRC);
 
         // Create render pipeline using helpers
         let render_pipeline_layout = create_pipeline_layout(
