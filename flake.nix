@@ -44,6 +44,7 @@
             vulkan-tools                  # vulkaninfo / vkcube to diagnose GPU/ICD issues
             glibc.dev                     # headers for bindgen (BINDGEN_EXTRA_CLANG_ARGS)
             glib.dev
+            renderdoc
           ] ++ runtimeLibs;
 
           shellHook = ''
