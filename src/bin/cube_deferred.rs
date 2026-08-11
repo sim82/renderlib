@@ -32,6 +32,7 @@ const LIGHTING_SHADER_PATH: &str = "src/shaders/cube_deferred_lighting.wgsl";
 /// - Albedo: surface color (RGB, A unused)
 #[derive(Debug)]
 pub struct GBuffer {
+    pub bind_group_layout: wgpu::BindGroupLayout,
     pub position_texture: wgpu::Texture,
     pub normal_texture: wgpu::Texture,
     pub albedo_texture: wgpu::Texture,
@@ -117,6 +118,7 @@ impl GBuffer {
         });
 
         GBuffer {
+            bind_group_layout: Self::bind_group_layout(device),
             position_texture,
             normal_texture,
             albedo_texture,
@@ -197,7 +199,7 @@ impl GBuffer {
     }
 
     /// Create a bind group layout for accessing this G-buffer.
-    pub fn bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    fn bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("GBuffer Bind Group Layout"),
             entries: &[
@@ -240,6 +242,32 @@ impl GBuffer {
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
+                },
+            ],
+        })
+    }
+
+    /// Create a bind group for this G-buffer with the given layout.
+    pub fn create_bind_group(&self, device: &wgpu::Device) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("GBuffer Bind Group"),
+            layout: &self.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&self.position_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&self.normal_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&self.albedo_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
                 },
             ],
         })
@@ -457,36 +485,6 @@ impl DeferredRenderer {
         Ok(pipeline)
     }
 
-    /// Create a bind group for G-buffer textures.
-    fn create_gbuffer_bind_group(
-        &self,
-        device: &wgpu::Device,
-        layout: &wgpu::BindGroupLayout,
-    ) -> wgpu::BindGroup {
-        device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("GBuffer Bind Group"),
-            layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&self.gbuffer.position_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&self.gbuffer.normal_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::TextureView(&self.gbuffer.albedo_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::Sampler(&self.gbuffer.sampler),
-                },
-            ],
-        })
-    }
-
     /// Reload geometry shader.
     fn reload_geometry_shader(&mut self, device: &wgpu::Device) -> Result<(), String> {
         let shader_src = Self::load_shader_source(&self.geometry_shader_path)?;
@@ -617,13 +615,10 @@ impl AppRenderer for DeferredRenderer {
             &lighting_uniform_buffer,
         );
 
-        // Create G-buffer bind group layout
-        let gbuffer_bind_group_layout = GBuffer::bind_group_layout(device);
-
         // Create lighting pipeline
         let lighting_pipeline = Self::create_lighting_pipeline(
             device,
-            &gbuffer_bind_group_layout,
+            &gbuffer.bind_group_layout,
             &lighting_uniform_bind_group_layout,
             context.surface_format,
             &lighting_shader_src,
@@ -729,9 +724,7 @@ impl AppRenderer for DeferredRenderer {
         let mut encoder = context.device.create_command_encoder(&Default::default());
 
         // Create G-buffer bind group for lighting pass
-        let gbuffer_bind_group_layout = GBuffer::bind_group_layout(&context.device);
-        let gbuffer_bind_group =
-            self.create_gbuffer_bind_group(&context.device, &gbuffer_bind_group_layout);
+        let gbuffer_bind_group = self.gbuffer.create_bind_group(&context.device);
 
         // =====================================================================
         // GEOMETRY PASS: Render cube to G-buffer
