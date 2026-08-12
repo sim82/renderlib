@@ -18,261 +18,14 @@ use winit::keyboard::Key;
 
 use renderlib::app::{App, AppRenderer};
 use renderlib::context::GraphicsContext;
+use renderlib::deferred::GBuffer;
 use renderlib::device_helpers::*;
 use renderlib::geometry::{primitives, PosColorNormalVertex};
+use renderlib::mesh::{quad_vertices_2d, QuadVertex};
 
 /// Paths to the shader files.
 const GEOMETRY_SHADER_PATH: &str = "src/shaders/cube_deferred_geometry.wgsl";
 const LIGHTING_SHADER_PATH: &str = "src/shaders/cube_deferred_lighting.wgsl";
-
-/// G-buffer texture format for deferred rendering.
-/// Each texture stores one component of the deferred data:
-/// - Position: world space position (RGB, A unused)
-/// - Normal: world space normal (RGB, A unused)
-/// - Albedo: surface color (RGB, A unused)
-#[derive(Debug)]
-pub struct GBuffer {
-    pub bind_group_layout: wgpu::BindGroupLayout,
-    pub position_texture: wgpu::Texture,
-    pub normal_texture: wgpu::Texture,
-    pub albedo_texture: wgpu::Texture,
-    pub position_view: wgpu::TextureView,
-    pub normal_view: wgpu::TextureView,
-    pub albedo_view: wgpu::TextureView,
-    pub sampler: wgpu::Sampler,
-    pub width: u32,
-    pub height: u32,
-}
-
-impl GBuffer {
-    /// Create a new G-buffer with the given dimensions.
-    pub fn new(device: &wgpu::Device, width: u32, height: u32, label_prefix: Option<&str>) -> Self {
-        let texture_format = wgpu::TextureFormat::Rgba16Float;
-        let texture_usage = wgpu::TextureUsages::TEXTURE_BINDING
-            | wgpu::TextureUsages::RENDER_ATTACHMENT
-            | wgpu::TextureUsages::COPY_DST;
-
-        // Create position texture
-        let position_texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: label_prefix.map(|p| format!("{}_Position", p)).as_deref(),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: texture_format,
-            usage: texture_usage,
-            view_formats: &[texture_format],
-        });
-
-        // Create normal texture
-        let normal_texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: label_prefix.map(|p| format!("{}_Normal", p)).as_deref(),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: texture_format,
-            usage: texture_usage,
-            view_formats: &[texture_format],
-        });
-
-        // Create albedo texture
-        let albedo_texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: label_prefix.map(|p| format!("{}_Albedo", p)).as_deref(),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: texture_format,
-            usage: texture_usage,
-            view_formats: &[texture_format],
-        });
-
-        // Create texture views
-        let position_view = position_texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let normal_view = normal_texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let albedo_view = albedo_texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-        // Create sampler for G-buffer sampling
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: label_prefix.map(|p| format!("{}_Sampler", p)).as_deref(),
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
-            ..Default::default()
-        });
-
-        GBuffer {
-            bind_group_layout: Self::bind_group_layout(device),
-            position_texture,
-            normal_texture,
-            albedo_texture,
-            position_view,
-            normal_view,
-            albedo_view,
-            sampler,
-            width,
-            height,
-        }
-    }
-
-    /// Resize the G-buffer to new dimensions.
-    pub fn resize(&mut self, device: &wgpu::Device, new_width: u32, new_height: u32) {
-        self.width = new_width;
-        self.height = new_height;
-
-        // Recreate textures with new size
-        let texture_format = wgpu::TextureFormat::Rgba16Float;
-        let texture_usage = wgpu::TextureUsages::TEXTURE_BINDING
-            | wgpu::TextureUsages::RENDER_ATTACHMENT
-            | wgpu::TextureUsages::COPY_DST;
-
-        self.position_texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("GBuffer Position Texture"),
-            size: wgpu::Extent3d {
-                width: new_width,
-                height: new_height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: texture_format,
-            usage: texture_usage,
-            view_formats: &[texture_format],
-        });
-
-        self.normal_texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("GBuffer Normal Texture"),
-            size: wgpu::Extent3d {
-                width: new_width,
-                height: new_height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: texture_format,
-            usage: texture_usage,
-            view_formats: &[texture_format],
-        });
-
-        self.albedo_texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("GBuffer Albedo Texture"),
-            size: wgpu::Extent3d {
-                width: new_width,
-                height: new_height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: texture_format,
-            usage: texture_usage,
-            view_formats: &[texture_format],
-        });
-
-        self.position_view = self
-            .position_texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-        self.normal_view = self
-            .normal_texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-        self.albedo_view = self
-            .albedo_texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-    }
-
-    /// Create a bind group layout for accessing this G-buffer.
-    fn bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
-        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("GBuffer Bind Group Layout"),
-            entries: &[
-                // Position texture
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                // Normal texture
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                // Albedo texture
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                // Sampler
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-        })
-    }
-
-    /// Create a bind group for this G-buffer with the given layout.
-    pub fn create_bind_group(&self, device: &wgpu::Device) -> wgpu::BindGroup {
-        device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("GBuffer Bind Group"),
-            layout: &self.bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&self.position_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&self.normal_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::TextureView(&self.albedo_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
-                },
-            ],
-        })
-    }
-}
 
 /// Uniform data for the geometry pass (MVP and model matrices).
 #[repr(C)]
@@ -290,51 +43,6 @@ pub struct LightingUniforms {
     pub view_position: [f32; 4],  // vec3 padded to vec4 for 16-byte alignment
     pub light_position: [f32; 4], // vec3 padded to vec4 for 16-byte alignment
 }
-
-/// Vertex with just position for full-screen quad (2D coordinates).
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct QuadVertex {
-    pub position: [f32; 2],
-}
-
-impl QuadVertex {
-    pub fn desc() -> wgpu::VertexBufferLayout<'static> {
-        wgpu::VertexBufferLayout {
-            array_stride: std::mem::size_of::<Self>() as wgpu::BufferAddress,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &[wgpu::VertexAttribute {
-                offset: 0,
-                shader_location: 0,
-                format: wgpu::VertexFormat::Float32x2,
-            }],
-        }
-    }
-}
-
-/// Full-screen quad vertices using 2D positions.
-const QUAD_VERTICES_2D: &[QuadVertex] = &[
-    // First triangle
-    QuadVertex {
-        position: [0.0, 0.0],
-    },
-    QuadVertex {
-        position: [1.0, 0.0],
-    },
-    QuadVertex {
-        position: [0.0, 1.0],
-    },
-    // Second triangle
-    QuadVertex {
-        position: [1.0, 0.0],
-    },
-    QuadVertex {
-        position: [1.0, 1.0],
-    },
-    QuadVertex {
-        position: [0.0, 1.0],
-    },
-];
 
 /// Renderer for deferred rendering demo.
 pub struct DeferredRenderer {
@@ -357,7 +65,7 @@ pub struct DeferredRenderer {
     lighting_pipeline: wgpu::RenderPipeline,
     lighting_shader_path: String,
 
-    // G-buffer
+    // G-buffer from framework
     gbuffer: GBuffer,
 
     // Pipeline state
@@ -395,11 +103,7 @@ impl DeferredRenderer {
         );
 
         // Create pipeline with multiple color attachments for G-buffer
-        let color_attachment_formats = [
-            wgpu::TextureFormat::Rgba16Float, // Position
-            wgpu::TextureFormat::Rgba16Float, // Normal
-            wgpu::TextureFormat::Rgba16Float, // Albedo
-        ];
+        let color_attachment_formats = GBuffer::color_formats();
 
         let color_targets: Vec<Option<wgpu::ColorTargetState>> = color_attachment_formats
             .iter()
@@ -501,10 +205,9 @@ impl DeferredRenderer {
     /// Reload lighting shader.
     fn reload_lighting_shader(&mut self, device: &wgpu::Device) -> Result<(), String> {
         let shader_src = Self::load_shader_source(&self.lighting_shader_path)?;
-        let gbuffer_bind_group_layout = GBuffer::bind_group_layout(device);
         self.lighting_pipeline = Self::create_lighting_pipeline(
             device,
-            &gbuffer_bind_group_layout,
+            &self.gbuffer.bind_group_layout,
             &self.lighting_uniform_bind_group_layout,
             self.surface_format,
             &shader_src,
@@ -547,11 +250,11 @@ impl AppRenderer for DeferredRenderer {
         let quad_vertex_buffer = create_buffer_from_slice(
             device,
             Some("Quad Vertex Buffer"),
-            QUAD_VERTICES_2D,
+            quad_vertices_2d(),
             wgpu::BufferUsages::VERTEX,
         );
 
-        // Create G-buffer
+        // Create G-buffer from framework
         let gbuffer = GBuffer::new(device, size.width, size.height, Some("Deferred"));
 
         // Create geometry pass uniform buffer
@@ -566,7 +269,7 @@ impl AppRenderer for DeferredRenderer {
             wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         );
 
-        // Create geometry bind group layout and bind group
+        // Create geometry bind group layout and bind group using framework helpers
         let geometry_bind_group_layout = create_uniform_bind_group_layout(
             device,
             Some("Geometry Uniform Bind Group Layout"),
@@ -601,7 +304,7 @@ impl AppRenderer for DeferredRenderer {
             wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         );
 
-        // Create lighting uniform bind group layout and bind group
+        // Create lighting uniform bind group layout and bind group using framework helpers
         let lighting_uniform_bind_group_layout = create_uniform_bind_group_layout(
             device,
             Some("Lighting Uniform Bind Group Layout"),
@@ -730,35 +433,26 @@ impl AppRenderer for DeferredRenderer {
         // GEOMETRY PASS: Render cube to G-buffer
         // =====================================================================
         {
-            let gbuffer_color_attachments = [
-                Some(wgpu::RenderPassColorAttachment {
-                    view: &self.gbuffer.position_view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                }),
-                Some(wgpu::RenderPassColorAttachment {
-                    view: &self.gbuffer.normal_view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                }),
-                Some(wgpu::RenderPassColorAttachment {
-                    view: &self.gbuffer.albedo_view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                }),
-            ];
+            let gbuffer_color_attachments = GBuffer::color_targets()
+                .iter()
+                .enumerate()
+                .map(|(i, _target)| {
+                    Some(wgpu::RenderPassColorAttachment {
+                        view: match i {
+                            0 => &self.gbuffer.position_view,
+                            1 => &self.gbuffer.normal_view,
+                            2 => &self.gbuffer.albedo_view,
+                            _ => unreachable!(),
+                        },
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })
+                })
+                .collect::<Vec<_>>();
 
             let mut geometry_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Geometry Pass"),

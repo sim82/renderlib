@@ -1,12 +1,11 @@
 //! GLTF mesh loading demo: Loads and renders a GLTF mesh instead of a cube.
 //!
 //! This demo demonstrates:
-//! - Loading a GLTF mesh from disk using the `import` feature
+//! - Loading a GLTF mesh from disk using the framework mesh module
 //! - Extracting vertex positions and normals
 //! - Rendering with perspective projection and lighting
 //! - Smooth rotation of the loaded mesh
-//!
-//! Press R to reload shaders.
+//! - Press R to reload shaders
 
 use std::time::Instant;
 
@@ -18,7 +17,8 @@ use winit::keyboard::Key;
 use renderlib::app::{App, AppRenderer};
 use renderlib::context::GraphicsContext;
 use renderlib::device_helpers::*;
-use renderlib::geometry::{primitives, PosColorNormalVertex};
+use renderlib::geometry::PosColorNormalVertex;
+use renderlib::mesh::load_gltf;
 
 /// Path to the shader file (reuse cube shader).
 const SHADER_PATH: &str = "src/shaders/cube.wgsl";
@@ -38,17 +38,6 @@ pub struct Uniforms {
     pub _padding: f32,
 }
 
-/// Vertex data loaded from GLTF mesh.
-/// We use PosColorNormalVertex with a default color for all vertices.
-struct GltfMesh {
-    vertices: Vec<PosColorNormalVertex>,
-    indices: Vec<u16>,
-    /// Scale factor to normalize the model to approximately unit size.
-    scale: f32,
-    /// Center point of the mesh (bounding box center) to translate to origin.
-    center: cgmath::Vector3<f32>,
-}
-
 /// Renderer for the GLTF mesh demo with lighting.
 pub struct GltfRenderer {
     vertex_buffer: wgpu::Buffer,
@@ -66,181 +55,10 @@ pub struct GltfRenderer {
     /// Scale factor to normalize model size (computed from bounding box).
     model_scale: f32,
     /// Translation to center the mesh at origin (computed from bounding box center).
-    mesh_center: cgmath::Vector3<f32>,
+    mesh_center: Vector3<f32>,
 }
 
 impl GltfRenderer {
-    /// Loads a GLTF file and extracts the first mesh's vertex and index data.
-    /// Returns vertices with a default color (light gray), indices, and a scale factor.
-    fn load_gltf_mesh(path: &str) -> Result<GltfMesh, String> {
-        // Use the gltf::import function which loads document + buffers + images
-        let (document, buffers, _images) = if path.ends_with(".glb") {
-            // For .glb files, read as bytes first
-            let data = std::fs::read(path)
-                .map_err(|e| format!("Failed to read GLB file '{}': {}", path, e))?;
-            gltf::import_slice(&data)
-                .map_err(|e| format!("Failed to import GLB '{}': {}", path, e))?
-        } else {
-            // For .gltf files, import from path (handles external buffers)
-            gltf::import(path).map_err(|e| format!("Failed to import GLTF '{}': {}", path, e))?
-        };
-
-        // Get the first mesh
-        let mesh = document
-            .meshes()
-            .next()
-            .ok_or("No meshes found in GLTF file".to_string())?;
-
-        // First pass: collect all positions to calculate bounding box
-        let mut all_positions: Vec<[f32; 3]> = Vec::new();
-        let mut all_indices: Vec<u16> = Vec::new();
-        let mut vertex_offset: u32 = 0;
-
-        for primitive in mesh.primitives() {
-            let reader = primitive.reader(|buffer| buffers.get(buffer.index()).map(|b| &*b.0));
-            let positions: Vec<[f32; 3]> = match reader.read_positions() {
-                Some(positions) => positions.collect(),
-                None => return Err("Mesh primitive has no POSITION attribute".to_string()),
-            };
-
-            let num_positions = positions.len();
-            all_positions.extend(positions);
-
-            let primitive_indices: Vec<u16> = match reader.read_indices() {
-                Some(indices) => {
-                    use gltf::mesh::util::ReadIndices;
-                    match indices {
-                        ReadIndices::U8(iter) => iter.map(|x| x as u16).collect(),
-                        ReadIndices::U16(iter) => iter.collect(),
-                        ReadIndices::U32(iter) => iter.map(|x| x as u16).collect(),
-                    }
-                }
-                None => (0..num_positions as u16).collect(),
-            };
-
-            let offset_indices: Vec<u16> = primitive_indices
-                .iter()
-                .map(|&idx| idx.saturating_add(vertex_offset as u16))
-                .collect();
-            all_indices.extend(offset_indices);
-            vertex_offset += num_positions as u32;
-        }
-
-        // Calculate scale factor and center based on bounding box
-        let (scale, center) = if !all_positions.is_empty() {
-            let mut min_x = f32::INFINITY;
-            let mut max_x = f32::NEG_INFINITY;
-            let mut min_y = f32::INFINITY;
-            let mut max_y = f32::NEG_INFINITY;
-            let mut min_z = f32::INFINITY;
-            let mut max_z = f32::NEG_INFINITY;
-
-            for &[x, y, z] in &all_positions {
-                min_x = min_x.min(x);
-                max_x = max_x.max(x);
-                min_y = min_y.min(y);
-                max_y = max_y.max(y);
-                min_z = min_z.min(z);
-                max_z = max_z.max(z);
-            }
-
-            let width = max_x - min_x;
-            let height = max_y - min_y;
-            let depth = max_z - min_z;
-            let max_dim = width.max(height).max(depth);
-
-            // Scale to approximately fit in a 2x2x2 box (similar to the cube demo)
-            let scale = if max_dim > 0.0 && max_dim.is_finite() {
-                2.0 / max_dim
-            } else {
-                1.0
-            };
-
-            // Center is the midpoint of the bounding box
-            let center = cgmath::Vector3::new(
-                (min_x + max_x) / 2.0,
-                (min_y + max_y) / 2.0,
-                (min_z + max_z) / 2.0,
-            );
-
-            (scale, center)
-        } else {
-            (1.0, cgmath::Vector3::new(0.0, 0.0, 0.0))
-        };
-
-        // Second pass: build vertices with normals and color
-        let mut all_vertices: Vec<PosColorNormalVertex> = Vec::new();
-        let mut vertex_offset: u32 = 0;
-
-        for primitive in mesh.primitives() {
-            let reader = primitive.reader(|buffer| buffers.get(buffer.index()).map(|b| &*b.0));
-
-            // Read positions (required)
-            let positions: Vec<[f32; 3]> = match reader.read_positions() {
-                Some(positions) => positions.collect(),
-                None => return Err("Mesh primitive has no POSITION attribute".to_string()),
-            };
-
-            // Read normals (optional, default to upward if missing)
-            let normals: Vec<[f32; 3]> = match reader.read_normals() {
-                Some(normals) => normals.collect(),
-                None => {
-                    // Generate default normals (pointing up)
-                    vec![[0.0, 1.0, 0.0]; positions.len()]
-                }
-            };
-
-            // Read indices (optional)
-            let primitive_indices: Vec<u16> = match reader.read_indices() {
-                Some(indices) => {
-                    use gltf::mesh::util::ReadIndices;
-                    match indices {
-                        ReadIndices::U8(iter) => iter.map(|x| x as u16).collect(),
-                        ReadIndices::U16(iter) => iter.collect(),
-                        ReadIndices::U32(iter) => iter.map(|x| x as u16).collect(),
-                    }
-                }
-                None => {
-                    // Generate sequential indices if not present
-                    (0..positions.len() as u16).collect()
-                }
-            };
-
-            // Create vertices with default color (light gray)
-            let default_color: [f32; 3] = [0.8, 0.8, 0.8];
-            let mut mesh_vertices = Vec::new();
-            for (i, position) in positions.iter().enumerate() {
-                let normal = normals.get(i).copied().unwrap_or([0.0, 1.0, 0.0]);
-                mesh_vertices.push(PosColorNormalVertex {
-                    position: *position,
-                    color: default_color,
-                    normal,
-                });
-            }
-
-            // Adjust indices with vertex offset (for multi-primitive meshes)
-            let offset_indices: Vec<u16> = primitive_indices
-                .iter()
-                .map(|&idx| idx.saturating_add(vertex_offset as u16))
-                .collect();
-
-            all_vertices.extend(mesh_vertices);
-            all_indices.extend(offset_indices);
-            vertex_offset += positions.len() as u32;
-        }
-
-        if all_vertices.is_empty() {
-            return Err("No vertices loaded from GLTF mesh".to_string());
-        }
-
-        Ok(GltfMesh {
-            vertices: all_vertices,
-            indices: all_indices,
-            scale,
-            center,
-        })
-    }
-
     /// Creates the render pipeline from the shader file with depth testing enabled.
     fn create_pipeline(
         device: &wgpu::Device,
@@ -309,53 +127,14 @@ impl GltfRenderer {
         self.should_reload = false;
         Ok(())
     }
-
-    /// Creates a depth texture and view for depth testing.
-    fn create_depth_texture(
-        device: &wgpu::Device,
-        width: u32,
-        height: u32,
-        label: Option<&str>,
-    ) -> (wgpu::Texture, wgpu::TextureView) {
-        let depth_texture = device.create_texture(&wgpu::TextureDescriptor {
-            label,
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Depth32Float,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            view_formats: &[],
-        });
-
-        let depth_texture_view = depth_texture.create_view(&wgpu::TextureViewDescriptor {
-            label: label.map(|s| format!("{} View", s)).as_deref(),
-            format: Some(wgpu::TextureFormat::Depth32Float),
-            dimension: Some(wgpu::TextureViewDimension::D2),
-            aspect: wgpu::TextureAspect::DepthOnly,
-            base_mip_level: 0,
-            mip_level_count: None,
-            base_array_layer: 0,
-            array_layer_count: None,
-            usage: Some(wgpu::TextureUsages::RENDER_ATTACHMENT),
-        });
-
-        (depth_texture, depth_texture_view)
-    }
 }
 
 impl AppRenderer for GltfRenderer {
     async fn init(context: &GraphicsContext) -> Self {
         let device = &context.device;
 
-        // Load GLTF mesh, or fall back to cube if file doesn't exist
-        let (vertices, indices, model_scale, mesh_center) = match GltfRenderer::load_gltf_mesh(
-            GLTF_PATH,
-        ) {
+        // Load GLTF mesh using framework, or fall back to cube if file doesn't exist
+        let (vertices, indices, model_scale, mesh_center) = match load_gltf(GLTF_PATH) {
             Ok(mesh) => {
                 eprintln!(
                     "Loaded GLTF mesh: {} vertices, {} indices, scale: {:.2}, center: ({:.2}, {:.2}, {:.2})",
@@ -373,8 +152,9 @@ impl AppRenderer for GltfRenderer {
                 eprintln!("Falling back to hardcoded cube.");
                 eprintln!("To use a custom GLTF/GLB file, place it at '{}'", GLTF_PATH);
                 // Fall back to the hardcoded cube from primitives
+                use renderlib::geometry::primitives;
                 let (v, i) = primitives::cube_vertices();
-                (v, i, 1.0, cgmath::Vector3::new(0.0, 0.0, 0.0)) // Cube is already centered
+                (v, i, 1.0, Vector3::new(0.0, 0.0, 0.0)) // Cube is already centered
             }
         };
         let num_indices = indices.len() as u32;
@@ -395,8 +175,8 @@ impl AppRenderer for GltfRenderer {
             wgpu::BufferUsages::INDEX,
         );
 
-        // Create depth texture for depth testing
-        let (depth_texture, depth_texture_view) = Self::create_depth_texture(
+        // Create depth texture for depth testing using framework helper
+        let (depth_texture, depth_texture_view) = create_depth_texture(
             device,
             context.size.width,
             context.size.height,
@@ -573,8 +353,8 @@ impl AppRenderer for GltfRenderer {
     }
 
     fn resize(&mut self, context: &mut GraphicsContext, new_size: winit::dpi::PhysicalSize<u32>) {
-        // Recreate depth texture with new size
-        let (depth_texture, depth_texture_view) = Self::create_depth_texture(
+        // Recreate depth texture with new size using framework helper
+        let (depth_texture, depth_texture_view) = create_depth_texture(
             &context.device,
             new_size.width,
             new_size.height,

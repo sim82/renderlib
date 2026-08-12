@@ -6,5 +6,7 @@
 
 pub mod app;
 pub mod context;
+pub mod deferred;
 pub mod device_helpers;
 pub mod geometry;
+pub mod mesh;

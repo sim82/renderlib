@@ -228,3 +228,51 @@ pub fn create_uniform_bind_group(
         }],
     })
 }
+
+/// Creates a depth texture and view for depth testing.
+///
+/// # Arguments
+///
+/// * `device` - The wgpu device to create resources with
+/// * `width` - The width of the texture
+/// * `height` - The height of the texture
+/// * `label` - Optional label for the texture
+///
+/// # Returns
+///
+/// A tuple of (depth_texture, depth_texture_view) ready for use in render passes.
+pub fn create_depth_texture(
+    device: &wgpu::Device,
+    width: u32,
+    height: u32,
+    label: Option<&str>,
+) -> (wgpu::Texture, wgpu::TextureView) {
+    let depth_texture = device.create_texture(&wgpu::TextureDescriptor {
+        label,
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Depth32Float,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    });
+
+    let depth_texture_view = depth_texture.create_view(&wgpu::TextureViewDescriptor {
+        label: label.map(|s| format!("{} View", s)).as_deref(),
+        format: Some(wgpu::TextureFormat::Depth32Float),
+        dimension: Some(wgpu::TextureViewDimension::D2),
+        aspect: wgpu::TextureAspect::DepthOnly,
+        base_mip_level: 0,
+        mip_level_count: None,
+        base_array_layer: 0,
+        array_layer_count: None,
+        usage: Some(wgpu::TextureUsages::RENDER_ATTACHMENT),
+    });
+
+    (depth_texture, depth_texture_view)
+}
