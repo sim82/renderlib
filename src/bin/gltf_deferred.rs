@@ -19,7 +19,7 @@ use renderlib::context::GraphicsContext;
 use renderlib::deferred::GBuffer;
 use renderlib::device_helpers::*;
 use renderlib::geometry::PosColorNormalVertex;
-use renderlib::mesh::{load_gltf, quad_vertices_2d, QuadVertex};
+use renderlib::mesh::{load_gltf, QuadVertex, quad_vertices_2d};
 
 /// Paths to the shader files.
 const GEOMETRY_SHADER_PATH: &str = "src/shaders/cube_deferred_geometry.wgsl";
@@ -96,7 +96,7 @@ impl GltfDeferredRenderer {
             .map_err(|e| format!("Failed to read shader file {}: {}", path, e))
     }
 
-    /// Create the geometry pass pipeline.
+    /// Create the geometry pass pipeline using the enhanced builder.
     fn create_geometry_pipeline(
         device: &wgpu::Device,
         bind_group_layout: &wgpu::BindGroupLayout,
@@ -112,27 +112,7 @@ impl GltfDeferredRenderer {
             &[Some(bind_group_layout)],
         );
 
-        // Create pipeline with multiple color attachments for G-buffer
-        let color_attachment_formats = GBuffer::color_formats();
-
-        let color_targets: Vec<Option<wgpu::ColorTargetState>> = color_attachment_formats
-            .iter()
-            .map(|&format| {
-                Some(wgpu::ColorTargetState {
-                    format,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })
-            })
-            .collect();
-
-        let fragment_state = wgpu::FragmentState {
-            module: &shader_module,
-            entry_point: Some("fs_main"),
-            targets: &color_targets,
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-        };
-
+        // Use the enhanced builder with multi-color attachments for G-buffer
         // Enable depth testing for geometry pass
         let depth_stencil = wgpu::DepthStencilState {
             format: wgpu::TextureFormat::Depth32Float,
@@ -142,28 +122,24 @@ impl GltfDeferredRenderer {
             bias: wgpu::DepthBiasState::default(),
         };
 
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Deferred Geometry Pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader_module,
-                entry_point: Some("vs_main"),
-                buffers: &[Some(PosColorNormalVertex::desc())],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            },
-            fragment: Some(fragment_state),
-            primitive: wgpu::PrimitiveState {
+        let pipeline = RenderPipelineBuilder::new(device)
+            .with_label(Some("Deferred Geometry Pipeline"))
+            .with_layout(Some(&pipeline_layout))
+            .with_shader_module(&shader_module)
+            .with_vertex_entry("vs_main")
+            .with_fragment_entry("fs_main")
+            .with_vertex_buffers(&[Some(PosColorNormalVertex::desc())])
+            .with_color_formats(&GBuffer::color_formats())
+            .with_blend_states(&[None, None, None])
+            .with_depth_stencil(Some(depth_stencil))
+            .with_primitive(wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,
                 strip_index_format: None,
                 front_face: wgpu::FrontFace::Ccw,
                 cull_mode: Some(wgpu::Face::Back),
                 ..Default::default()
-            },
-            depth_stencil: Some(depth_stencil),
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
+            })
+            .build();
 
         Ok(pipeline)
     }
