@@ -463,6 +463,63 @@ impl CameraModelUniform {
     }
 }
 
+/// Per-object transformation data for vertex shading.
+///
+/// Contains the model matrix and the combined model-view-projection matrix.
+/// Used in the geometry pass of deferred rendering or as part of forward rendering.
+///
+/// # Layout (std140)
+/// - mvp: mat4 (16 bytes)
+/// - model: mat4 (16 bytes)
+/// - Total: 32 bytes
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct GeometryUniform {
+    /// Model-view-projection matrix (combines camera and model transformations).
+    pub mvp: [[f32; 4]; 4],
+    /// Model matrix (local to world space transformation).
+    pub model: [[f32; 4]; 4],
+}
+
+impl GeometryUniform {
+    /// Creates a geometry uniform from camera, model matrix, and aspect ratio.
+    pub fn new(camera: &Camera, model_matrix: Matrix4<f32>, aspect_ratio: f32) -> Self {
+        let view_proj = camera.get_view_projection_matrix(aspect_ratio);
+        Self {
+            mvp: (view_proj * model_matrix).into(),
+            model: model_matrix.into(),
+        }
+    }
+}
+
+/// Lighting parameters for fragment shading.
+///
+/// Contains camera position and light position for lighting calculations.
+/// Used in the lighting pass of deferred rendering or in forward rendering.
+///
+/// # Layout (std140)
+/// - view_position: vec4 (16 bytes)
+/// - light_position: vec4 (16 bytes)
+/// - Total: 32 bytes
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct LightingUniform {
+    /// Camera position in world space (used for specular highlights).
+    pub view_position: [f32; 4],
+    /// Light position in world space.
+    pub light_position: [f32; 4],
+}
+
+impl LightingUniform {
+    /// Creates a lighting uniform from camera and light position.
+    pub fn new(camera: &Camera, light_position: [f32; 3]) -> Self {
+        Self {
+            view_position: [camera.position.x, camera.position.y, camera.position.z, 0.0],
+            light_position: [light_position[0], light_position[1], light_position[2], 0.0],
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

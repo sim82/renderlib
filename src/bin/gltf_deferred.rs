@@ -15,7 +15,7 @@ use winit::event_loop::EventLoop;
 use winit::keyboard::Key;
 
 use renderlib::app::{App, AppRenderer};
-use renderlib::camera::Camera;
+use renderlib::camera::{Camera, GeometryUniform, LightingUniform};
 use renderlib::context::GraphicsContext;
 use renderlib::deferred::GBuffer;
 use renderlib::device_helpers::*;
@@ -28,23 +28,6 @@ const LIGHTING_SHADER_PATH: &str = "src/shaders/cube_deferred_lighting.wgsl";
 
 /// Default GLTF file path.
 const GLTF_PATH: &str = "assets/duck.glb";
-
-/// Uniform data for the geometry pass (MVP and model matrices).
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct GeometryUniforms {
-    pub mvp: [[f32; 4]; 4],
-    pub model: [[f32; 4]; 4],
-}
-
-/// Uniform data for the lighting pass (camera and light positions).
-/// Uses std140 layout: each vec3 occupies 16 bytes, f32 occupies 16 bytes with padding
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct LightingUniforms {
-    pub view_position: [f32; 4],  // vec3 padded to vec4 for 16-byte alignment
-    pub light_position: [f32; 4], // vec3 padded to vec4 for 16-byte alignment
-}
 
 /// Renderer for deferred rendering demo with GLTF mesh.
 pub struct GltfDeferredRenderer {
@@ -214,6 +197,8 @@ impl AppRenderer for GltfDeferredRenderer {
     async fn init(context: &GraphicsContext) -> Self {
         let device = &context.device;
         let size = context.size;
+        let aspect = size.width as f32 / size.height as f32;
+        let camera = Camera::new();
 
         // Load shaders
         let geometry_shader_src =
@@ -282,10 +267,7 @@ impl AppRenderer for GltfDeferredRenderer {
         );
 
         // Create geometry pass uniform buffer
-        let geometry_uniform_init = GeometryUniforms {
-            mvp: Matrix4::<f32>::identity().into(),
-            model: Matrix4::<f32>::identity().into(),
-        };
+        let geometry_uniform_init = GeometryUniform::new(&camera, Matrix4::identity(), aspect);
         let geometry_uniform_buffer = create_buffer(
             device,
             Some("Geometry Uniform Buffer"),
@@ -317,10 +299,7 @@ impl AppRenderer for GltfDeferredRenderer {
         .expect("Failed to create geometry pipeline");
 
         // Create lighting pass uniform buffer
-        let lighting_uniform_init = LightingUniforms {
-            view_position: [0.0, 0.0, 5.0, 0.0],
-            light_position: [2.0, 3.0, 4.0, 0.0],
-        };
+        let lighting_uniform_init = LightingUniform::new(&camera, [2.0, 3.0, 4.0]);
         let lighting_uniform_buffer = create_buffer(
             device,
             Some("Lighting Uniform Buffer"),
@@ -376,7 +355,7 @@ impl AppRenderer for GltfDeferredRenderer {
             should_reload_geometry: false,
             should_reload_lighting: false,
             start_time: Instant::now(),
-            camera: Camera::new(),
+            camera,
         }
     }
 
@@ -430,33 +409,23 @@ impl AppRenderer for GltfDeferredRenderer {
             * scale_matrix
             * translation;
 
-        // Get view and projection matrices from camera
+        // Get aspect ratio
         let aspect = context.size.width as f32 / context.size.height as f32;
-        let view = self.camera.get_view_matrix();
-        let proj = self.camera.get_projection_matrix(aspect);
-
-        // MVP = projection * view * model
-        let mvp = proj * view * model;
 
         // Update geometry uniform buffer
+        let geometry_uniform = GeometryUniform::new(&self.camera, model, aspect);
         context.queue.write_buffer(
             &self.geometry_uniform_buffer,
             0,
-            bytemuck::cast_slice(&[GeometryUniforms {
-                mvp: mvp.into(),
-                model: model.into(),
-            }]),
+            bytemuck::cast_slice(&[geometry_uniform]),
         );
 
         // Update lighting uniform buffer
-        let camera_pos = self.camera.get_position();
+        let lighting_uniform = LightingUniform::new(&self.camera, [2.0, 3.0, 4.0]);
         context.queue.write_buffer(
             &self.lighting_uniform_buffer,
             0,
-            bytemuck::cast_slice(&[LightingUniforms {
-                view_position: [camera_pos.x, camera_pos.y, camera_pos.z, 0.0],
-                light_position: [2.0, 3.0, 4.0, 0.0],
-            }]),
+            bytemuck::cast_slice(&[lighting_uniform]),
         );
 
         // Get current surface texture

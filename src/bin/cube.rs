@@ -11,13 +11,13 @@
 
 use std::time::Instant;
 
-use cgmath::{Matrix4, Rad, SquareMatrix};
+use cgmath::{Matrix4, Rad};
 use winit::event::WindowEvent;
 use winit::event_loop::EventLoop;
 use winit::keyboard::Key;
 
 use renderlib::app::{App, AppRenderer};
-use renderlib::camera::Camera;
+use renderlib::camera::{Camera, CameraModelUniform};
 use renderlib::context::GraphicsContext;
 use renderlib::device_helpers::*;
 use renderlib::geometry::{primitives, PosColorNormalVertex};
@@ -25,15 +25,7 @@ use renderlib::geometry::{primitives, PosColorNormalVertex};
 /// Path to the shader file.
 const SHADER_PATH: &str = "src/shaders/cube.wgsl";
 
-/// Uniform data containing the model-view-projection matrix, model matrix, and light position.
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct Uniforms {
-    pub mvp: [[f32; 4]; 4],
-    pub model: [[f32; 4]; 4],
-    pub light_pos: [f32; 3],
-    pub _padding: f32,
-}
+// Using CameraModelUniform from framework instead of custom Uniforms struct
 
 /// Renderer for the 3D spinning cube demo with lighting.
 pub struct CubeRenderer {
@@ -119,16 +111,10 @@ impl AppRenderer for CubeRenderer {
         );
 
         // Create uniform buffer for MVP, model matrix, and light position
-        let uniform_init = Uniforms {
-            mvp: Matrix4::<f32>::identity().into(),
-            model: Matrix4::<f32>::identity().into(),
-            light_pos: [0.0, 0.0, 5.0], // Light at camera position
-            _padding: 0.0,
-        };
         let uniform_buffer = create_buffer(
             device,
             Some("MVP Uniform Buffer"),
-            &uniform_init,
+            &CameraModelUniform::identity(),
             wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         );
 
@@ -193,29 +179,18 @@ impl AppRenderer for CubeRenderer {
         let model =
             Matrix4::from_angle_y(Rad(elapsed * 0.5)) * Matrix4::from_angle_x(Rad(elapsed * 0.3));
 
-        // Get view and projection matrices from camera
+        // Update uniform buffer with camera and model data
         let aspect = context.size.width as f32 / context.size.height as f32;
-        let view = self.camera.get_view_matrix();
-        let proj = self.camera.get_projection_matrix(aspect);
-
-        // MVP = projection * view * model
-        let mvp = proj * view * model;
-
-        // Light position (at camera)
         let camera_pos = self.camera.get_position();
-        let light_pos = [camera_pos.x, camera_pos.y, camera_pos.z];
-
-        // Update uniform buffer
-        context.queue.write_buffer(
-            &self.uniform_buffer,
-            0,
-            bytemuck::cast_slice(&[Uniforms {
-                mvp: mvp.into(),
-                model: model.into(),
-                light_pos,
-                _padding: 0.0,
-            }]),
+        let uniforms = CameraModelUniform::new(
+            &self.camera,
+            model,
+            [camera_pos.x, camera_pos.y, camera_pos.z],
+            aspect,
         );
+        context
+            .queue
+            .write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
 
         // Get current surface texture
         let surface_texture = match context.get_current_texture() {
