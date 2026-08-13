@@ -11,12 +11,13 @@
 
 use std::time::Instant;
 
-use cgmath::{perspective, Deg, Matrix4, Point3, Rad, SquareMatrix, Vector3};
+use cgmath::{Matrix4, Rad, SquareMatrix};
 use winit::event::WindowEvent;
 use winit::event_loop::EventLoop;
 use winit::keyboard::Key;
 
 use renderlib::app::{App, AppRenderer};
+use renderlib::camera::Camera;
 use renderlib::context::GraphicsContext;
 use renderlib::device_helpers::*;
 use renderlib::geometry::{primitives, PosColorNormalVertex};
@@ -45,6 +46,7 @@ pub struct CubeRenderer {
     surface_format: wgpu::TextureFormat,
     should_reload: bool,
     start_time: Instant,
+    camera: Camera,
 }
 
 impl CubeRenderer {
@@ -170,6 +172,7 @@ impl AppRenderer for CubeRenderer {
             surface_format: context.surface_format,
             should_reload: false,
             start_time: Instant::now(),
+            camera: Camera::new(),
         }
     }
 
@@ -191,26 +194,17 @@ impl AppRenderer for CubeRenderer {
         let model =
             Matrix4::from_angle_y(Rad(elapsed * 0.5)) * Matrix4::from_angle_x(Rad(elapsed * 0.3));
 
-        // Create view matrix (camera looking at origin from (0, 0, 5))
-        let eye = Point3::new(0.0, 0.0, 5.0);
-        let target = Point3::new(0.0, 0.0, 0.0);
-        let up = Vector3::new(0.0, 1.0, 0.0);
-        let view = Matrix4::look_at_rh(eye, target, up);
-
-        // Create perspective projection matrix
+        // Get view and projection matrices from camera
         let aspect = context.size.width as f32 / context.size.height as f32;
-        let proj = perspective::<f32, Deg<f32>>(
-            Deg(45.0),
-            aspect,
-            0.1,   // near plane
-            100.0, // far plane
-        );
+        let view = self.camera.get_view_matrix();
+        let proj = self.camera.get_projection_matrix(aspect);
 
         // MVP = projection * view * model
         let mvp = proj * view * model;
 
         // Light position (at camera)
-        let light_pos = [0.0, 0.0, 5.0];
+        let camera_pos = self.camera.get_position();
+        let light_pos = [camera_pos.x, camera_pos.y, camera_pos.z];
 
         // Update uniform buffer
         context.queue.write_buffer(

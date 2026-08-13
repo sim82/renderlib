@@ -5,6 +5,7 @@
 //! common geometry types.
 
 pub mod app;
+pub mod camera;
 pub mod context;
 pub mod deferred;
 pub mod device_helpers;

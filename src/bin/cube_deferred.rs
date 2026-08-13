@@ -11,17 +11,18 @@
 
 use std::time::Instant;
 
-use cgmath::{perspective, Deg, Matrix4, Point3, Rad, SquareMatrix, Vector3};
+use cgmath::{Matrix4, Rad, SquareMatrix};
 use winit::event::WindowEvent;
 use winit::event_loop::EventLoop;
 use winit::keyboard::Key;
 
 use renderlib::app::{App, AppRenderer};
+use renderlib::camera::Camera;
 use renderlib::context::GraphicsContext;
 use renderlib::deferred::GBuffer;
 use renderlib::device_helpers::*;
 use renderlib::geometry::{primitives, PosColorNormalVertex};
-use renderlib::mesh::{QuadVertex, quad_vertices_2d};
+use renderlib::mesh::{quad_vertices_2d, QuadVertex};
 
 /// Paths to the shader files.
 const GEOMETRY_SHADER_PATH: &str = "src/shaders/cube_deferred_geometry.wgsl";
@@ -77,6 +78,9 @@ pub struct DeferredRenderer {
 
     // Timing
     start_time: Instant,
+
+    // Camera
+    camera: Camera,
 }
 
 impl DeferredRenderer {
@@ -322,6 +326,7 @@ impl AppRenderer for DeferredRenderer {
             should_reload_geometry: false,
             should_reload_lighting: false,
             start_time: Instant::now(),
+            camera: Camera::new(),
         }
     }
 
@@ -358,15 +363,10 @@ impl AppRenderer for DeferredRenderer {
         let model =
             Matrix4::from_angle_y(Rad(elapsed * 0.5)) * Matrix4::from_angle_x(Rad(elapsed * 0.3));
 
-        // Create view matrix (camera looking at origin from (0, 0, 5))
-        let eye = Point3::new(0.0, 0.0, 5.0);
-        let target = Point3::new(0.0, 0.0, 0.0);
-        let up = Vector3::new(0.0, 1.0, 0.0);
-        let view = Matrix4::look_at_rh(eye, target, up);
-
-        // Create perspective projection matrix
+        // Get view and projection matrices from camera
         let aspect = context.size.width as f32 / context.size.height as f32;
-        let proj = perspective::<f32, Deg<f32>>(Deg(45.0), aspect, 0.1, 100.0);
+        let view = self.camera.get_view_matrix();
+        let proj = self.camera.get_projection_matrix(aspect);
 
         // MVP = projection * view * model
         let mvp = proj * view * model;
@@ -382,11 +382,12 @@ impl AppRenderer for DeferredRenderer {
         );
 
         // Update lighting uniform buffer
+        let camera_pos = self.camera.get_position();
         context.queue.write_buffer(
             &self.lighting_uniform_buffer,
             0,
             bytemuck::cast_slice(&[LightingUniforms {
-                view_position: [0.0, 0.0, 5.0, 0.0],
+                view_position: [camera_pos.x, camera_pos.y, camera_pos.z, 0.0],
                 light_position: [2.0, 3.0, 4.0, 0.0],
             }]),
         );
