@@ -94,12 +94,6 @@ pub struct GltfDeferredRenderer {
 }
 
 impl GltfDeferredRenderer {
-    /// Load shader source from file.
-    fn load_shader_source(path: &str) -> Result<String, String> {
-        std::fs::read_to_string(path)
-            .map_err(|e| format!("Failed to read shader file {}: {}", path, e))
-    }
-
     /// Create the geometry pass pipeline using the enhanced builder.
     fn create_geometry_pipeline(
         device: &wgpu::Device,
@@ -190,7 +184,7 @@ impl GltfDeferredRenderer {
 
     /// Reload geometry shader.
     fn reload_geometry_shader(&mut self, device: &wgpu::Device) -> Result<(), String> {
-        let shader_src = Self::load_shader_source(&self.geometry_shader_path)?;
+        let shader_src = load_shader_source(&self.geometry_shader_path)?;
         self.geometry_pipeline = Self::create_geometry_pipeline(
             device,
             &self.geometry_bind_group_layout,
@@ -203,7 +197,7 @@ impl GltfDeferredRenderer {
 
     /// Reload lighting shader.
     fn reload_lighting_shader(&mut self, device: &wgpu::Device) -> Result<(), String> {
-        let shader_src = Self::load_shader_source(&self.lighting_shader_path)?;
+        let shader_src = load_shader_source(&self.lighting_shader_path)?;
         self.lighting_pipeline = Self::create_lighting_pipeline(
             device,
             &self.gbuffer.bind_group_layout,
@@ -214,16 +208,6 @@ impl GltfDeferredRenderer {
         self.should_reload_lighting = false;
         Ok(())
     }
-
-    /// Creates a depth texture and view for depth testing.
-    fn create_depth_texture(
-        device: &wgpu::Device,
-        width: u32,
-        height: u32,
-        label: Option<&str>,
-    ) -> (wgpu::Texture, wgpu::TextureView) {
-        create_depth_texture(device, width, height, label)
-    }
 }
 
 impl AppRenderer for GltfDeferredRenderer {
@@ -233,9 +217,9 @@ impl AppRenderer for GltfDeferredRenderer {
 
         // Load shaders
         let geometry_shader_src =
-            Self::load_shader_source(GEOMETRY_SHADER_PATH).expect("Failed to load geometry shader");
+            load_shader_source(GEOMETRY_SHADER_PATH).expect("Failed to load geometry shader");
         let lighting_shader_src =
-            Self::load_shader_source(LIGHTING_SHADER_PATH).expect("Failed to load lighting shader");
+            load_shader_source(LIGHTING_SHADER_PATH).expect("Failed to load lighting shader");
 
         // Load GLTF mesh using framework, or fall back to cube if file doesn't exist
         let (vertices, indices, model_scale, mesh_center) = match load_gltf(GLTF_PATH) {
@@ -290,7 +274,7 @@ impl AppRenderer for GltfDeferredRenderer {
         let gbuffer = GBuffer::new(device, size.width, size.height, Some("Deferred"));
 
         // Create depth texture for geometry pass
-        let (depth_texture, depth_texture_view) = Self::create_depth_texture(
+        let (depth_texture, depth_texture_view) = create_depth_texture(
             device,
             size.width,
             size.height,
@@ -422,7 +406,7 @@ impl AppRenderer for GltfDeferredRenderer {
                 .resize(&context.device, context.size.width, context.size.height);
 
             // Recreate depth texture with new size
-            let (depth_texture, depth_texture_view) = Self::create_depth_texture(
+            let (depth_texture, depth_texture_view) = create_depth_texture(
                 &context.device,
                 context.size.width,
                 context.size.height,
@@ -492,30 +476,9 @@ impl AppRenderer for GltfDeferredRenderer {
         // GEOMETRY PASS: Render mesh to G-buffer
         // =====================================================================
         {
-            let gbuffer_color_attachments = GBuffer::color_targets()
-                .iter()
-                .enumerate()
-                .map(|(i, _target)| {
-                    Some(wgpu::RenderPassColorAttachment {
-                        view: match i {
-                            0 => &self.gbuffer.position_view,
-                            1 => &self.gbuffer.normal_view,
-                            2 => &self.gbuffer.albedo_view,
-                            _ => unreachable!(),
-                        },
-                        depth_slice: None,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                            store: wgpu::StoreOp::Store,
-                        },
-                    })
-                })
-                .collect::<Vec<_>>();
-
             let mut geometry_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Geometry Pass"),
-                color_attachments: &gbuffer_color_attachments,
+                color_attachments: &self.gbuffer.color_attachments(),
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &self.depth_texture_view,
                     depth_ops: Some(wgpu::Operations {
@@ -579,7 +542,7 @@ impl AppRenderer for GltfDeferredRenderer {
             .resize(&context.device, new_size.width, new_size.height);
 
         // Recreate depth texture with new size
-        let (depth_texture, depth_texture_view) = Self::create_depth_texture(
+        let (depth_texture, depth_texture_view) = create_depth_texture(
             &context.device,
             new_size.width,
             new_size.height,

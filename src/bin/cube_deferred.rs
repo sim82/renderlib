@@ -84,12 +84,6 @@ pub struct DeferredRenderer {
 }
 
 impl DeferredRenderer {
-    /// Load shader source from file.
-    fn load_shader_source(path: &str) -> Result<String, String> {
-        std::fs::read_to_string(path)
-            .map_err(|e| format!("Failed to read shader file {}: {}", path, e))
-    }
-
     /// Create the geometry pass pipeline using the enhanced builder.
     fn create_geometry_pipeline(
         device: &wgpu::Device,
@@ -170,7 +164,7 @@ impl DeferredRenderer {
 
     /// Reload geometry shader.
     fn reload_geometry_shader(&mut self, device: &wgpu::Device) -> Result<(), String> {
-        let shader_src = Self::load_shader_source(&self.geometry_shader_path)?;
+        let shader_src = load_shader_source(&self.geometry_shader_path)?;
         self.geometry_pipeline = Self::create_geometry_pipeline(
             device,
             &self.geometry_bind_group_layout,
@@ -183,7 +177,7 @@ impl DeferredRenderer {
 
     /// Reload lighting shader.
     fn reload_lighting_shader(&mut self, device: &wgpu::Device) -> Result<(), String> {
-        let shader_src = Self::load_shader_source(&self.lighting_shader_path)?;
+        let shader_src = load_shader_source(&self.lighting_shader_path)?;
         self.lighting_pipeline = Self::create_lighting_pipeline(
             device,
             &self.gbuffer.bind_group_layout,
@@ -203,9 +197,9 @@ impl AppRenderer for DeferredRenderer {
 
         // Load shaders
         let geometry_shader_src =
-            Self::load_shader_source(GEOMETRY_SHADER_PATH).expect("Failed to load geometry shader");
+            load_shader_source(GEOMETRY_SHADER_PATH).expect("Failed to load geometry shader");
         let lighting_shader_src =
-            Self::load_shader_source(LIGHTING_SHADER_PATH).expect("Failed to load lighting shader");
+            load_shader_source(LIGHTING_SHADER_PATH).expect("Failed to load lighting shader");
 
         // Get cube vertices and indices from framework primitives
         let (cube_vertices, cube_indices) = primitives::cube_vertices();
@@ -409,30 +403,9 @@ impl AppRenderer for DeferredRenderer {
         // GEOMETRY PASS: Render cube to G-buffer
         // =====================================================================
         {
-            let gbuffer_color_attachments = GBuffer::color_targets()
-                .iter()
-                .enumerate()
-                .map(|(i, _target)| {
-                    Some(wgpu::RenderPassColorAttachment {
-                        view: match i {
-                            0 => &self.gbuffer.position_view,
-                            1 => &self.gbuffer.normal_view,
-                            2 => &self.gbuffer.albedo_view,
-                            _ => unreachable!(),
-                        },
-                        depth_slice: None,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                            store: wgpu::StoreOp::Store,
-                        },
-                    })
-                })
-                .collect::<Vec<_>>();
-
             let mut geometry_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Geometry Pass"),
-                color_attachments: &gbuffer_color_attachments,
+                color_attachments: &self.gbuffer.color_attachments(),
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,

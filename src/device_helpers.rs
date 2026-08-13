@@ -3,6 +3,8 @@
 //! These helpers provide ergonomic wrappers around common wgpu operations,
 //! reducing boilerplate while maintaining full generality.
 
+use std::path::Path;
+
 use wgpu::util::DeviceExt;
 
 /// Generic helper to create a buffer from any Pod type
@@ -31,6 +33,25 @@ pub fn create_buffer_from_slice<T: bytemuck::Pod>(
         contents: bytemuck::cast_slice(data),
         usage,
     })
+}
+
+/// Load shader source code from a file.
+///
+/// # Arguments
+///
+/// * `path` - Path to the shader file (WGSL format)
+///
+/// # Returns
+///
+/// The shader source code as a string, or an error if the file cannot be read or is empty.
+pub fn load_shader_source<P: AsRef<Path>>(path: P) -> Result<String, String> {
+    let path_str = path.as_ref().display().to_string();
+    let source = std::fs::read_to_string(&path)
+        .map_err(|e| format!("Failed to read shader file {}: {}", path_str, e))?;
+    if source.is_empty() {
+        return Err(format!("Shader file {} is empty", path_str));
+    }
+    Ok(source)
 }
 
 /// Generic helper to create a shader module from WGSL source

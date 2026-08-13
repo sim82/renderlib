@@ -44,8 +44,7 @@ impl TriangleRenderer {
         bind_group_layout: &wgpu::BindGroupLayout,
         surface_format: wgpu::TextureFormat,
     ) -> Result<wgpu::RenderPipeline, String> {
-        let shader_src = std::fs::read_to_string(SHADER_PATH)
-            .map_err(|e| format!("Failed to read shader file: {}", e))?;
+        let shader_src = load_shader_source(SHADER_PATH)?;
 
         let shader_module = create_shader_module(device, Some("Triangle Shader"), &shader_src);
 

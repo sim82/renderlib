@@ -279,4 +279,40 @@ impl GBuffer {
             },
         ]
     }
+
+    /// Creates render pass color attachments for this G-buffer's texture views.
+    ///
+    /// This is useful for setting up a geometry pass render pass that writes to the G-buffer.
+    /// Each attachment will use Clear(Black) as the load operation.
+    pub fn color_attachments(&self) -> [Option<wgpu::RenderPassColorAttachment<'_>>; 3] {
+        [
+            Some(wgpu::RenderPassColorAttachment {
+                view: &self.position_view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
+            }),
+            Some(wgpu::RenderPassColorAttachment {
+                view: &self.normal_view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
+            }),
+            Some(wgpu::RenderPassColorAttachment {
+                view: &self.albedo_view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
+            }),
+        ]
+    }
 }
