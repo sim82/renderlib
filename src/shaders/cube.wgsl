@@ -1,8 +1,11 @@
-struct Uniforms {
+struct GeometryUniforms {
     mvp: mat4x4<f32>,
     model: mat4x4<f32>,
-    light_pos: vec3<f32>,
-    _padding: f32,
+};
+
+struct LightingUniforms {
+    view_position: vec4<f32>,
+    light_position: vec4<f32>,
 };
 
 struct VertexInput {
@@ -19,29 +22,32 @@ struct VertexOutput {
 };
 
 @group(0) @binding(0)
-var<uniform> uniforms: Uniforms;
+var<uniform> geometry_uniforms: GeometryUniforms;
+
+@group(0) @binding(1)
+var<uniform> lighting_uniforms: LightingUniforms;
 
 @vertex
 fn vs_main(
     model: VertexInput,
 ) -> VertexOutput {
     var out: VertexOutput;
-    out.clip_position = uniforms.mvp * vec4<f32>(model.position, 1.0);
+    out.clip_position = geometry_uniforms.mvp * vec4<f32>(model.position, 1.0);
     out.color = model.color;
     let normal_matrix = mat3x3<f32>(
-        uniforms.model[0].xyz,
-        uniforms.model[1].xyz,
-        uniforms.model[2].xyz
+        geometry_uniforms.model[0].xyz,
+        geometry_uniforms.model[1].xyz,
+        geometry_uniforms.model[2].xyz
     );
     out.normal = normal_matrix * model.normal;
-    out.world_pos = (uniforms.model * vec4<f32>(model.position, 1.0)).xyz;
+    out.world_pos = (geometry_uniforms.model * vec4<f32>(model.position, 1.0)).xyz;
     return out;
 }
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Calculate lighting
-    let light_dir = normalize(uniforms.light_pos - in.world_pos);
+    let light_dir = normalize(lighting_uniforms.light_position.xyz - in.world_pos);
     let normal = normalize(in.normal);
 
     // Diffuse lighting factor (dot product of normal and light direction)

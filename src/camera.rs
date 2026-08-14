@@ -417,52 +417,6 @@ impl Transform {
     }
 }
 
-/// Combined camera and model uniform data for shaders that need both.
-///
-/// This is commonly used in demos where you have a single uniform buffer
-/// containing both camera and model transformation data.
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct CameraModelUniform {
-    /// Model-view-projection matrix.
-    pub mvp: [[f32; 4]; 4],
-    /// Model matrix.
-    pub model: [[f32; 4]; 4],
-    /// Light position (for lighting calculations).
-    pub light_pos: [f32; 3],
-    pub _padding: f32,
-}
-
-impl CameraModelUniform {
-    /// Create from camera, model matrix, and light position.
-    pub fn new(
-        camera: &Camera,
-        model_matrix: Matrix4<f32>,
-        light_pos: [f32; 3],
-        aspect_ratio: f32,
-    ) -> Self {
-        let view_proj = camera.get_view_projection_matrix(aspect_ratio);
-        let mvp = view_proj * model_matrix;
-
-        Self {
-            mvp: mvp.into(),
-            model: model_matrix.into(),
-            light_pos,
-            _padding: 0.0,
-        }
-    }
-
-    /// Create with identity matrices.
-    pub fn identity() -> Self {
-        Self {
-            mvp: Matrix4::<f32>::identity().into(),
-            model: Matrix4::<f32>::identity().into(),
-            light_pos: [0.0, 0.0, 0.0],
-            _padding: 0.0,
-        }
-    }
-}
-
 /// Per-object transformation data for vertex shading.
 ///
 /// Contains the model matrix and the combined model-view-projection matrix.

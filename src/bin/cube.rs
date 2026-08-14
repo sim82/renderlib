@@ -11,13 +11,13 @@
 
 use std::time::Instant;
 
-use cgmath::{Matrix4, Rad};
+use cgmath::{Matrix4, Rad, SquareMatrix};
 use winit::event::WindowEvent;
 use winit::event_loop::EventLoop;
 use winit::keyboard::Key;
 
 use renderlib::app::{App, AppRenderer};
-use renderlib::camera::{Camera, CameraModelUniform};
+use renderlib::camera::{Camera, GeometryUniform, LightingUniform};
 use renderlib::context::GraphicsContext;
 use renderlib::device_helpers::*;
 use renderlib::geometry::{primitives, PosColorNormalVertex};
@@ -25,13 +25,12 @@ use renderlib::geometry::{primitives, PosColorNormalVertex};
 /// Path to the shader file.
 const SHADER_PATH: &str = "src/shaders/cube.wgsl";
 
-// Using CameraModelUniform from framework instead of custom Uniforms struct
-
 /// Renderer for the 3D spinning cube demo with lighting.
 pub struct CubeRenderer {
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
-    uniform_buffer: wgpu::Buffer,
+    geometry_uniform_buffer: wgpu::Buffer,
+    lighting_uniform_buffer: wgpu::Buffer,
     uniform_bind_group: wgpu::BindGroup,
     render_pipeline: wgpu::RenderPipeline,
     bind_group_layout: wgpu::BindGroupLayout,
@@ -110,36 +109,67 @@ impl AppRenderer for CubeRenderer {
             wgpu::BufferUsages::INDEX,
         );
 
-        // Create uniform buffer for MVP, model matrix, and light position
-        let uniform_buffer = create_buffer(
+        let camera = Camera::new();
+        let aspect = context.size.width as f32 / context.size.height as f32;
+
+        // Create geometry uniform buffer for MVP and model matrices
+        let geometry_uniform_buffer = create_buffer(
             device,
-            Some("MVP Uniform Buffer"),
-            &CameraModelUniform::identity(),
+            Some("Geometry Uniform Buffer"),
+            &GeometryUniform::new(&camera, Matrix4::identity(), aspect),
             wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         );
 
-        // Create bind group layout - needs to be accessible from both vertex and fragment shaders
+        // Create lighting uniform buffer for view position and light position
+        let lighting_uniform_buffer = create_buffer(
+            device,
+            Some("Lighting Uniform Buffer"),
+            &LightingUniform::new(&camera, [2.0, 3.0, 4.0]),
+            wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        );
+
+        // Create bind group layout with two entries: geometry (vertex) and lighting (fragment)
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Uniform Bind Group Layout"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
+            entries: &[
+                // Geometry uniforms at binding 0 (vertex stage)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
                 },
-                count: None,
-            }],
+                // Lighting uniforms at binding 1 (fragment stage)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
         });
 
         let uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Uniform Bind Group"),
             layout: &bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: uniform_buffer.as_entire_binding(),
-            }],
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: geometry_uniform_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: lighting_uniform_buffer.as_entire_binding(),
+                },
+            ],
         });
 
         // Create initial pipeline
@@ -150,14 +180,15 @@ impl AppRenderer for CubeRenderer {
         CubeRenderer {
             vertex_buffer,
             index_buffer,
-            uniform_buffer,
+            geometry_uniform_buffer,
+            lighting_uniform_buffer,
             uniform_bind_group,
             render_pipeline,
             bind_group_layout,
             surface_format: context.surface_format,
             should_reload: false,
             start_time: Instant::now(),
-            camera: Camera::new(),
+            camera,
         }
     }
 
@@ -179,18 +210,22 @@ impl AppRenderer for CubeRenderer {
         let model =
             Matrix4::from_angle_y(Rad(elapsed * 0.5)) * Matrix4::from_angle_x(Rad(elapsed * 0.3));
 
-        // Update uniform buffer with camera and model data
+        // Update geometry uniform buffer
         let aspect = context.size.width as f32 / context.size.height as f32;
-        let camera_pos = self.camera.get_position();
-        let uniforms = CameraModelUniform::new(
-            &self.camera,
-            model,
-            [camera_pos.x, camera_pos.y, camera_pos.z],
-            aspect,
+        let geometry_uniform = GeometryUniform::new(&self.camera, model, aspect);
+        context.queue.write_buffer(
+            &self.geometry_uniform_buffer,
+            0,
+            bytemuck::cast_slice(&[geometry_uniform]),
         );
-        context
-            .queue
-            .write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
+
+        // Update lighting uniform buffer
+        let lighting_uniform = LightingUniform::new(&self.camera, [2.0, 3.0, 4.0]);
+        context.queue.write_buffer(
+            &self.lighting_uniform_buffer,
+            0,
+            bytemuck::cast_slice(&[lighting_uniform]),
+        );
 
         // Get current surface texture
         let surface_texture = match context.get_current_texture() {
