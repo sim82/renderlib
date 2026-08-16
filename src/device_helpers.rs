@@ -81,7 +81,8 @@ pub fn create_pipeline_layout(
 
 /// Builder for creating render pipelines with a fluent API.
 ///
-/// Supports both single-color and multi-color (e.g., deferred rendering) pipelines.
+/// Supports both single-color and multi-color (e.g., deferred rendering) pipelines
+/// through a unified `with_color_formats()` method.
 ///
 /// # Example - Single Color Attachment
 ///
@@ -120,12 +121,10 @@ pub struct RenderPipelineBuilder<'a> {
     vertex_entry: Option<&'a str>,
     fragment_entry: Option<&'a str>,
     vertex_buffers: Option<&'a [Option<wgpu::VertexBufferLayout<'a>>]>,
-    /// Single color format (for simple pipelines) - takes precedence if both single and multi are set
-    color_format: Option<wgpu::TextureFormat>,
-    /// Multiple color formats (for deferred rendering, etc.)
-    color_formats: Option<&'a [wgpu::TextureFormat]>,
-    /// Blend state per color attachment. If None, defaults to REPLACE for single, None for multi.
-    blend_states: Option<&'a [Option<wgpu::BlendState>]>,
+    /// Color formats for the pipeline's color attachments.
+    color_formats: Vec<wgpu::TextureFormat>,
+    /// Blend state per color attachment. Defaults to None (no blending) if not set.
+    blend_states: Vec<Option<wgpu::BlendState>>,
     /// Depth and stencil state
     depth_stencil: Option<wgpu::DepthStencilState>,
     primitive: wgpu::PrimitiveState,
@@ -142,9 +141,8 @@ impl<'a> RenderPipelineBuilder<'a> {
             vertex_entry: None,
             fragment_entry: None,
             vertex_buffers: None,
-            color_format: None,
-            color_formats: None,
-            blend_states: None,
+            color_formats: Vec::new(),
+            blend_states: Vec::new(),
             depth_stencil: None,
             primitive: wgpu::PrimitiveState::default(),
         }
@@ -189,29 +187,28 @@ impl<'a> RenderPipelineBuilder<'a> {
         self
     }
 
-    /// Set a single color format for the pipeline's target.
-    /// This is the simplest way for pipelines with one color attachment.
-    pub fn with_color_format(mut self, format: wgpu::TextureFormat) -> Self {
-        self.color_format = Some(format);
+    /// Set color formats for pipelines with one or more render targets.
+    /// For a single target, pass `&[format]`.
+    /// For multiple targets (e.g., deferred rendering), pass the full array.
+    pub fn with_color_formats(mut self, formats: &[wgpu::TextureFormat]) -> Self {
+        self.color_formats = formats.to_vec();
         self
     }
 
-    /// Set multiple color formats for pipelines with multiple render targets.
-    /// This is useful for deferred rendering, where you might have separate
-    /// targets for position, normal, and albedo.
-    pub fn with_color_formats(mut self, formats: &'a [wgpu::TextureFormat]) -> Self {
-        self.color_formats = Some(formats);
+    /// Set a single color format for the pipeline's target.
+    /// This is a convenience method for single-attachment pipelines.
+    /// Equivalent to `with_color_formats(&[format])`.
+    pub fn with_color_format(mut self, format: wgpu::TextureFormat) -> Self {
+        self.color_formats = vec![format];
         self
     }
 
     /// Set blend states for each color attachment.
     /// Each element corresponds to a color target.
     /// Use `None` for no blending, or `Some(blend_state)` for custom blending.
-    ///
-    /// If not set, defaults to `Some(BlendState::REPLACE)` for single-color pipelines,
-    /// and `None` for multi-color pipelines.
-    pub fn with_blend_states(mut self, states: &'a [Option<wgpu::BlendState>]) -> Self {
-        self.blend_states = Some(states);
+    /// If not set, defaults to `None` (no blending) for all attachments.
+    pub fn with_blend_states(mut self, states: &[Option<wgpu::BlendState>]) -> Self {
+        self.blend_states = states.to_vec();
         self
     }
 
@@ -235,7 +232,7 @@ impl<'a> RenderPipelineBuilder<'a> {
     /// Panics if:
     /// - Shader module is not set
     /// - Vertex buffers are not set
-    /// - Neither single color format nor multiple color formats are set
+    /// - Color formats are not set
     pub fn build(self) -> wgpu::RenderPipeline {
         let shader_module = self.shader_module.expect("Shader module must be set");
         let vertex_buffers = self.vertex_buffers.expect("Vertex buffers must be set");
@@ -247,7 +244,6 @@ impl<'a> RenderPipelineBuilder<'a> {
             compilation_options: wgpu::PipelineCompilationOptions::default(),
         };
 
-        // Build color targets based on single or multi-color configuration
         let color_targets = self.build_color_targets();
 
         let fragment_state = wgpu::FragmentState {
@@ -273,33 +269,18 @@ impl<'a> RenderPipelineBuilder<'a> {
 
     /// Build color target states from the configured formats and blend states.
     fn build_color_targets(&self) -> Vec<Option<wgpu::ColorTargetState>> {
-        // Single color format takes precedence if set (backward compatibility)
-        if let Some(format) = self.color_format {
-            let blend = self
-                .blend_states
-                .and_then(|states| states.first().copied())
-                .unwrap_or(Some(wgpu::BlendState::REPLACE));
-            return vec![Some(wgpu::ColorTargetState {
-                format,
-                blend,
-                write_mask: wgpu::ColorWrites::ALL,
-            })];
+        if self.color_formats.is_empty() {
+            panic!("Color formats must be set. Use with_color_format() or with_color_formats().");
         }
 
-        // Multiple color formats
-        let formats = self.color_formats.expect(
-            "Either color_format or color_formats must be set. Use with_color_format() for single target or with_color_formats() for multiple targets."
-        );
-
-        // Determine blend states to use
-        let blend_states: Vec<Option<wgpu::BlendState>> = if let Some(states) = self.blend_states {
-            states.to_vec()
+        // Use explicitly set blend states, or default to None (no blending) for all
+        let blend_states: Vec<Option<wgpu::BlendState>> = if self.blend_states.is_empty() {
+            vec![None; self.color_formats.len()]
         } else {
-            // Default: no blending for multi-target pipelines (e.g., deferred rendering)
-            vec![None; formats.len()]
+            self.blend_states.clone()
         };
 
-        formats
+        self.color_formats
             .iter()
             .zip(blend_states.iter())
             .map(|(&format, &blend)| {
