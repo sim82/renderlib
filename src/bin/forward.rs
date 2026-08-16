@@ -19,8 +19,8 @@ use renderlib::app::{App, AppRenderer};
 use renderlib::camera::{Camera, GeometryUniform, LightingUniform};
 use renderlib::context::GraphicsContext;
 use renderlib::device_helpers::*;
-use renderlib::geometry::PosColorNormalVertex;
-use renderlib::mesh::load_mesh;
+use renderlib::geometry::{primitives, PosColorNormalVertex};
+use renderlib::mesh::{load_gltf, Mesh};
 
 /// Path to the shader file.
 const SHADER_PATH: &str = "src/shaders/forward.wgsl";
@@ -114,7 +114,13 @@ impl AppRenderer for ForwardRenderer {
         let device = &context.device;
 
         // Load mesh using framework, or fall back to cube if file doesn't exist
-        let mesh = load_mesh(DEFAULT_MESH_PATH);
+        let mesh = match load_gltf(DEFAULT_MESH_PATH) {
+            Ok(mesh) => mesh,
+            Err(_) => {
+                let (vertices, indices) = primitives::cube_vertices();
+                Mesh::new(vertices, indices)
+            }
+        };
         let vertices = mesh.vertices;
         let indices = mesh.indices;
         let model_scale = mesh.scale;

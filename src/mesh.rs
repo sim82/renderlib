@@ -7,7 +7,7 @@ use cgmath::{Vector3, Zero};
 use gltf::mesh::util::ReadIndices;
 
 use crate::device_helpers::create_buffer_from_slice;
-use crate::geometry::{primitives, PosColorNormalVertex};
+use crate::geometry::PosColorNormalVertex;
 
 /// Bounding box for a mesh, used for calculating scale and center.
 #[derive(Debug, Clone, Copy)]
@@ -321,30 +321,6 @@ pub fn load_gltf(path: &str) -> Result<Mesh, MeshLoadError> {
         scale,
         center,
     })
-}
-
-/// Load a mesh from a GLTF or GLB file, falling back to a built-in cube if loading fails.
-///
-/// This is useful for demos where you want to provide a fallback if the asset is missing.
-///
-/// # Arguments
-///
-/// * `path` - Path to the GLTF (.gltf) or GLB (.glb) file
-///
-/// # Returns
-///
-/// A `Mesh` containing the loaded vertices and indices, or a default cube if loading fails.
-pub fn load_mesh(path: &str) -> Mesh {
-    match load_gltf(path) {
-        Ok(mesh) => mesh,
-        Err(e) => {
-            eprintln!("Failed to load mesh: {}", e);
-            eprintln!("Falling back to built-in cube.");
-            // Fall back to the hardcoded cube from primitives
-            let (vertices, indices) = primitives::cube_vertices();
-            Mesh::new(vertices, indices)
-        }
-    }
 }
 
 /// Vertex with just position for full-screen quad (2D coordinates).

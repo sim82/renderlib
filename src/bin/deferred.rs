@@ -20,8 +20,8 @@ use renderlib::camera::{Camera, GeometryUniform, LightingUniform};
 use renderlib::context::GraphicsContext;
 use renderlib::deferred::GBuffer;
 use renderlib::device_helpers::*;
-use renderlib::geometry::PosColorNormalVertex;
-use renderlib::mesh::{load_mesh, quad_vertices_2d, QuadVertex};
+use renderlib::geometry::{primitives, PosColorNormalVertex};
+use renderlib::mesh::{load_gltf, quad_vertices_2d, Mesh, QuadVertex};
 
 /// Paths to the shader files.
 const GEOMETRY_SHADER_PATH: &str = "src/shaders/deferred_geometry.wgsl";
@@ -210,7 +210,13 @@ impl AppRenderer for DeferredRenderer {
             load_shader_source(LIGHTING_SHADER_PATH).expect("Failed to load lighting shader");
 
         // Load mesh using framework, or fall back to cube if file doesn't exist
-        let mesh = load_mesh(DEFAULT_MESH_PATH);
+        let mesh = match load_gltf(DEFAULT_MESH_PATH) {
+            Ok(mesh) => mesh,
+            Err(_) => {
+                let (vertices, indices) = primitives::cube_vertices();
+                Mesh::new(vertices, indices)
+            }
+        };
         let vertices = mesh.vertices;
         let indices = mesh.indices;
         let model_scale = mesh.scale;
