@@ -1,17 +1,16 @@
-//! Deferred rendering demo: 3D spinning cube with deferred shading pipeline.
+//! Deferred rendering demo with mesh loading.
 //!
-//! This example demonstrates deferred rendering with:
-//! - G-buffer with position, normal, and albedo textures
-//! - Geometry pass: renders cube to G-buffer
+//! Combines mesh loading with deferred shading pipeline:
+//! - Loads a GLTF mesh from disk (defaults to assets/duck.glb)
+//! - Falls back to a built-in cube if GLTF file is not found
+//! - Geometry pass: renders mesh to G-buffer (position, normal, albedo)
 //! - Lighting pass: full-screen quad that reads G-buffer and computes lighting
-//! - Shader hot-reload on R key
-//!
-//! The deferred pipeline separates geometry rendering from lighting calculation,
-//! allowing for more complex lighting scenarios with multiple lights.
+//! - Auto-scales and centers the mesh
+//! - Press R to reload shaders
 
 use std::time::Instant;
 
-use cgmath::{Matrix4, Rad, SquareMatrix};
+use cgmath::{Matrix4, Rad, SquareMatrix, Vector3};
 use winit::event::WindowEvent;
 use winit::event_loop::EventLoop;
 use winit::keyboard::Key;
@@ -21,18 +20,24 @@ use renderlib::camera::{Camera, GeometryUniform, LightingUniform};
 use renderlib::context::GraphicsContext;
 use renderlib::deferred::GBuffer;
 use renderlib::device_helpers::*;
-use renderlib::geometry::{primitives, PosColorNormalVertex};
-use renderlib::mesh::{quad_vertices_2d, QuadVertex};
+use renderlib::geometry::PosColorNormalVertex;
+use renderlib::mesh::{load_gltf, quad_vertices_2d, QuadVertex};
 
 /// Paths to the shader files.
-const GEOMETRY_SHADER_PATH: &str = "src/shaders/cube_deferred_geometry.wgsl";
-const LIGHTING_SHADER_PATH: &str = "src/shaders/cube_deferred_lighting.wgsl";
+const GEOMETRY_SHADER_PATH: &str = "src/shaders/deferred_geometry.wgsl";
+const LIGHTING_SHADER_PATH: &str = "src/shaders/deferred_lighting.wgsl";
+
+/// Default mesh file path.
+/// The model should be a GLTF 2.0 (.gltf/.glb) file with at least POSITION attributes.
+/// If the file doesn't exist, a built-in cube will be used.
+const DEFAULT_MESH_PATH: &str = "assets/duck.glb";
 
 /// Renderer for deferred rendering demo.
 pub struct DeferredRenderer {
-    // Cube resources
-    cube_vertex_buffer: wgpu::Buffer,
-    cube_index_buffer: wgpu::Buffer,
+    // GLTF mesh resources
+    mesh_vertex_buffer: wgpu::Buffer,
+    mesh_index_buffer: wgpu::Buffer,
+    num_indices: u32,
 
     // Geometry pass resources
     geometry_uniform_buffer: wgpu::Buffer,
@@ -49,11 +54,19 @@ pub struct DeferredRenderer {
     lighting_pipeline: wgpu::RenderPipeline,
     lighting_shader_path: String,
 
+    // Depth buffer for geometry pass
+    depth_texture: wgpu::Texture,
+    depth_texture_view: wgpu::TextureView,
+
     // G-buffer from framework
     gbuffer: GBuffer,
 
     // Pipeline state
     surface_format: wgpu::TextureFormat,
+
+    // Mesh transforms
+    model_scale: f32,
+    mesh_center: Vector3<f32>,
 
     // Hot-reload state
     should_reload_geometry: bool,
@@ -84,6 +97,15 @@ impl DeferredRenderer {
         );
 
         // Use the enhanced builder with multi-color attachments for G-buffer
+        // Enable depth testing for geometry pass
+        let depth_stencil = wgpu::DepthStencilState {
+            format: wgpu::TextureFormat::Depth32Float,
+            depth_write_enabled: Some(true),
+            depth_compare: Some(wgpu::CompareFunction::Less),
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
+        };
+
         let pipeline = RenderPipelineBuilder::new(device)
             .with_label(Some("Deferred Geometry Pipeline"))
             .with_layout(Some(&pipeline_layout))
@@ -93,6 +115,7 @@ impl DeferredRenderer {
             .with_vertex_buffers(&[Some(PosColorNormalVertex::desc())])
             .with_color_formats(&GBuffer::color_formats())
             .with_blend_states(&[None, None, None])
+            .with_depth_stencil(Some(depth_stencil))
             .with_primitive(wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,
                 strip_index_format: None,
@@ -186,21 +209,47 @@ impl AppRenderer for DeferredRenderer {
         let lighting_shader_src =
             load_shader_source(LIGHTING_SHADER_PATH).expect("Failed to load lighting shader");
 
-        // Get cube vertices and indices from framework primitives
-        let (cube_vertices, cube_indices) = primitives::cube_vertices();
+        // Load mesh using framework, or fall back to cube if file doesn't exist
+        let (vertices, indices, model_scale, mesh_center) = match load_gltf(DEFAULT_MESH_PATH) {
+            Ok(mesh) => {
+                eprintln!(
+                    "Loaded GLTF mesh: {} vertices, {} indices, scale: {:.2}, center: ({:.2}, {:.2}, {:.2})",
+                    mesh.vertices.len(),
+                    mesh.indices.len(),
+                    mesh.scale,
+                    mesh.center.x,
+                    mesh.center.y,
+                    mesh.center.z
+                );
+                (mesh.vertices, mesh.indices, mesh.scale, mesh.center)
+            }
+            Err(e) => {
+                eprintln!("Failed to load mesh: {}", e);
+                eprintln!("Falling back to hardcoded cube.");
+                eprintln!(
+                    "To use a custom GLTF/GLB file, place it at '{}'",
+                    DEFAULT_MESH_PATH
+                );
+                // Fall back to the hardcoded cube from primitives
+                use renderlib::geometry::primitives;
+                let (v, i) = primitives::cube_vertices();
+                (v, i, 1.0, Vector3::new(0.0, 0.0, 0.0)) // Cube is already centered
+            }
+        };
+        let num_indices = indices.len() as u32;
 
-        // Create cube buffers
-        let cube_vertex_buffer = create_buffer_from_slice(
+        // Create mesh buffers
+        let mesh_vertex_buffer = create_buffer_from_slice(
             device,
-            Some("Cube Vertex Buffer"),
-            &cube_vertices,
+            Some("GLTF Vertex Buffer"),
+            &vertices,
             wgpu::BufferUsages::VERTEX,
         );
 
-        let cube_index_buffer = create_buffer_from_slice(
+        let mesh_index_buffer = create_buffer_from_slice(
             device,
-            Some("Cube Index Buffer"),
-            &cube_indices,
+            Some("GLTF Index Buffer"),
+            &indices,
             wgpu::BufferUsages::INDEX,
         );
 
@@ -214,6 +263,14 @@ impl AppRenderer for DeferredRenderer {
 
         // Create G-buffer from framework
         let gbuffer = GBuffer::new(device, size.width, size.height, Some("Deferred"));
+
+        // Create depth texture for geometry pass
+        let (depth_texture, depth_texture_view) = create_depth_texture(
+            device,
+            size.width,
+            size.height,
+            Some("GLTF Deferred Depth Texture"),
+        );
 
         // Create geometry pass uniform buffer
         let geometry_uniform_init = GeometryUniform::new(&camera, Matrix4::identity(), aspect);
@@ -281,8 +338,9 @@ impl AppRenderer for DeferredRenderer {
         .expect("Failed to create lighting pipeline");
 
         DeferredRenderer {
-            cube_vertex_buffer,
-            cube_index_buffer,
+            mesh_vertex_buffer,
+            mesh_index_buffer,
+            num_indices,
             geometry_uniform_buffer,
             geometry_bind_group_layout,
             geometry_bind_group,
@@ -294,8 +352,12 @@ impl AppRenderer for DeferredRenderer {
             lighting_uniform_bind_group,
             lighting_pipeline,
             lighting_shader_path: LIGHTING_SHADER_PATH.to_string(),
+            depth_texture,
+            depth_texture_view,
             gbuffer,
             surface_format: context.surface_format,
+            model_scale,
+            mesh_center,
             should_reload_geometry: false,
             should_reload_lighting: false,
             start_time: Instant::now(),
@@ -323,18 +385,35 @@ impl AppRenderer for DeferredRenderer {
             }
         }
 
-        // Resize G-buffer if needed
+        // Resize G-buffer and depth texture if needed
         if self.gbuffer.width != context.size.width || self.gbuffer.height != context.size.height {
             self.gbuffer
                 .resize(&context.device, context.size.width, context.size.height);
+
+            // Recreate depth texture with new size
+            let (depth_texture, depth_texture_view) = create_depth_texture(
+                &context.device,
+                context.size.width,
+                context.size.height,
+                Some("GLTF Deferred Depth Texture"),
+            );
+            self.depth_texture = depth_texture;
+            self.depth_texture_view = depth_texture_view;
         }
 
         // Calculate matrices
         let elapsed = self.start_time.elapsed().as_secs_f32();
 
-        // Create model matrix with rotation
-        let model =
-            Matrix4::from_angle_y(Rad(elapsed * 0.5)) * Matrix4::from_angle_x(Rad(elapsed * 0.3));
+        // Create model matrix with translation, scaling, and rotation
+        // In column-major matrices (cgmath), transformations are applied right-to-left:
+        // M = R * S * T means vertex is transformed as M * v = R * S * T * v
+        // So T (translation) is applied first, then S (scale), then R (rotation)
+        let translation = Matrix4::from_translation(-self.mesh_center);
+        let scale_matrix = Matrix4::from_scale(self.model_scale);
+        let model = Matrix4::from_angle_y(Rad(elapsed * 0.5))
+            * Matrix4::from_angle_x(Rad(elapsed * 0.3))
+            * scale_matrix
+            * translation;
 
         // Get aspect ratio
         let aspect = context.size.width as f32 / context.size.height as f32;
@@ -369,25 +448,32 @@ impl AppRenderer for DeferredRenderer {
         let gbuffer_bind_group = self.gbuffer.create_bind_group(&context.device);
 
         // =====================================================================
-        // GEOMETRY PASS: Render cube to G-buffer
+        // GEOMETRY PASS: Render mesh to G-buffer
         // =====================================================================
         {
             let mut geometry_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Geometry Pass"),
                 color_attachments: &self.gbuffer.color_attachments(),
-                depth_stencil_attachment: None,
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth_texture_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
                 timestamp_writes: None,
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
 
-            // Draw cube
+            // Draw mesh
             geometry_pass.set_pipeline(&self.geometry_pipeline);
             geometry_pass.set_bind_group(0, &self.geometry_bind_group, &[]);
-            geometry_pass.set_vertex_buffer(0, self.cube_vertex_buffer.slice(..));
+            geometry_pass.set_vertex_buffer(0, self.mesh_vertex_buffer.slice(..));
             geometry_pass
-                .set_index_buffer(self.cube_index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-            geometry_pass.draw_indexed(0..36, 0, 0..1);
+                .set_index_buffer(self.mesh_index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+            geometry_pass.draw_indexed(0..self.num_indices, 0, 0..1);
         }
 
         // =====================================================================
@@ -429,6 +515,16 @@ impl AppRenderer for DeferredRenderer {
         // Resize G-buffer
         self.gbuffer
             .resize(&context.device, new_size.width, new_size.height);
+
+        // Recreate depth texture with new size
+        let (depth_texture, depth_texture_view) = create_depth_texture(
+            &context.device,
+            new_size.width,
+            new_size.height,
+            Some("GLTF Deferred Depth Texture"),
+        );
+        self.depth_texture = depth_texture;
+        self.depth_texture_view = depth_texture_view;
     }
 
     fn input(&mut self, event: &WindowEvent) {

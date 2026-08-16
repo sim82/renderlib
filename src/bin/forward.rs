@@ -1,10 +1,11 @@
-//! GLTF mesh loading demo: Loads and renders a GLTF mesh instead of a cube.
+//! Forward rendering demo with mesh loading.
 //!
 //! This demo demonstrates:
-//! - Loading a GLTF mesh from disk using the framework mesh module
+//! - Loading a GLTF mesh from disk (defaults to assets/duck.glb)
+//! - Falls back to a built-in cube if GLTF file is not found
 //! - Extracting vertex positions and normals
 //! - Rendering with perspective projection and lighting
-//! - Smooth rotation of the loaded mesh
+//! - Smooth rotation of the mesh
 //! - Press R to reload shaders
 
 use std::time::Instant;
@@ -21,16 +22,17 @@ use renderlib::device_helpers::*;
 use renderlib::geometry::PosColorNormalVertex;
 use renderlib::mesh::load_gltf;
 
-/// Path to the shader file (reuse cube shader).
-const SHADER_PATH: &str = "src/shaders/cube.wgsl";
+/// Path to the shader file.
+const SHADER_PATH: &str = "src/shaders/forward.wgsl";
 
-/// Default GLTF file path.
+/// Default mesh file path.
 /// The model should be a GLTF 2.0 (.gltf/.glb) file with at least POSITION attributes.
 /// NORMAL attributes are optional (will use defaults if missing).
-const GLTF_PATH: &str = "assets/duck.glb";
+/// If the file doesn't exist, a built-in cube will be used.
+const DEFAULT_MESH_PATH: &str = "assets/duck.glb";
 
-/// Renderer for the GLTF mesh demo with lighting.
-pub struct GltfRenderer {
+/// Renderer for the forward rendering demo with lighting.
+pub struct ForwardRenderer {
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
     num_indices: u32,
@@ -51,7 +53,7 @@ pub struct GltfRenderer {
     camera: Camera,
 }
 
-impl GltfRenderer {
+impl ForwardRenderer {
     /// Creates the render pipeline from the shader file with depth testing enabled.
     fn create_pipeline(
         device: &wgpu::Device,
@@ -107,12 +109,12 @@ impl GltfRenderer {
     }
 }
 
-impl AppRenderer for GltfRenderer {
+impl AppRenderer for ForwardRenderer {
     async fn init(context: &GraphicsContext) -> Self {
         let device = &context.device;
 
-        // Load GLTF mesh using framework, or fall back to cube if file doesn't exist
-        let (vertices, indices, model_scale, mesh_center) = match load_gltf(GLTF_PATH) {
+        // Load mesh using framework, or fall back to cube if file doesn't exist
+        let (vertices, indices, model_scale, mesh_center) = match load_gltf(DEFAULT_MESH_PATH) {
             Ok(mesh) => {
                 eprintln!(
                     "Loaded GLTF mesh: {} vertices, {} indices, scale: {:.2}, center: ({:.2}, {:.2}, {:.2})",
@@ -126,9 +128,12 @@ impl AppRenderer for GltfRenderer {
                 (mesh.vertices, mesh.indices, mesh.scale, mesh.center)
             }
             Err(e) => {
-                eprintln!("Failed to load GLTF mesh: {}", e);
+                eprintln!("Failed to load mesh: {}", e);
                 eprintln!("Falling back to hardcoded cube.");
-                eprintln!("To use a custom GLTF/GLB file, place it at '{}'", GLTF_PATH);
+                eprintln!(
+                    "To use a custom GLTF/GLB file, place it at '{}'",
+                    DEFAULT_MESH_PATH
+                );
                 // Fall back to the hardcoded cube from primitives
                 use renderlib::geometry::primitives;
                 let (v, i) = primitives::cube_vertices();
@@ -229,7 +234,7 @@ impl AppRenderer for GltfRenderer {
             Self::create_pipeline(device, &bind_group_layout, context.surface_format)
                 .expect("Failed to create initial pipeline");
 
-        GltfRenderer {
+        ForwardRenderer {
             vertex_buffer,
             index_buffer,
             num_indices,
@@ -252,11 +257,11 @@ impl AppRenderer for GltfRenderer {
     fn render(&mut self, context: &mut GraphicsContext) {
         // Reload shader if requested
         if self.should_reload {
-            eprintln!("Reloading GLTF shader...");
+            eprintln!("Reloading forward shader...");
             if let Err(e) = self.reload_shader(&context.device) {
                 eprintln!("Shader reload failed: {}", e);
             } else {
-                eprintln!("GLTF shader reloaded successfully!");
+                eprintln!("Forward shader reloaded successfully!");
             }
         }
 
@@ -376,6 +381,6 @@ fn main() {
     // Use Poll control flow for smooth animation
     event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
 
-    let mut app = App::<GltfRenderer>::new();
+    let mut app = App::<ForwardRenderer>::new();
     event_loop.run_app(&mut app).unwrap();
 }
