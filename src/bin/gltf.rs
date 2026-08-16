@@ -77,37 +77,23 @@ impl GltfRenderer {
             bias: wgpu::DepthBiasState::default(),
         };
 
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("GLTF Render Pipeline"),
-            layout: Some(&render_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader_module,
-                entry_point: Some("vs_main"),
-                buffers: &[Some(PosColorNormalVertex::desc())],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader_module,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: surface_format.add_srgb_suffix(),
-                    blend: Some(wgpu::BlendState::REPLACE),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
+        let pipeline = RenderPipelineBuilder::new(device)
+            .with_label(Some("GLTF Render Pipeline"))
+            .with_layout(Some(&render_pipeline_layout))
+            .with_shader_module(&shader_module)
+            .with_vertex_entry("vs_main")
+            .with_fragment_entry("fs_main")
+            .with_vertex_buffers(&[Some(PosColorNormalVertex::desc())])
+            .with_color_format(surface_format.add_srgb_suffix())
+            .with_primitive(wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,
                 strip_index_format: None,
                 front_face: wgpu::FrontFace::Ccw,
                 cull_mode: Some(wgpu::Face::Back),
                 ..Default::default()
-            },
-            depth_stencil: Some(depth_stencil),
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
+            })
+            .with_depth_stencil(Some(depth_stencil))
+            .build();
 
         Ok(pipeline)
     }
