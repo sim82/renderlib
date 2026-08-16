@@ -41,29 +41,30 @@ fn vs_main(
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    // Sample G-buffer
-    let position = textureSample(gbuffer_position, sampler_linear, in.uv).xyz;
-    let normal = textureSample(gbuffer_normal, sampler_linear, in.uv).xyz;
-    let albedo = textureSample(gbuffer_albedo, sampler_linear, in.uv).xyz;
-    
+    // Sample G-buffer (flip Y to account for WGPU texture coordinate system)
+    let uv_flipped = vec2<f32>(in.uv.x, 1.0 - in.uv.y);
+    let position = textureSample(gbuffer_position, sampler_linear, uv_flipped).xyz;
+    let normal = textureSample(gbuffer_normal, sampler_linear, uv_flipped).xyz;
+    let albedo = textureSample(gbuffer_albedo, sampler_linear, uv_flipped).xyz;
+
     // Normalize sampled normal
     let n = normalize(normal);
-    
+
     // Calculate lighting
     let light_dir = normalize(lighting_uniforms.light_position.xyz - position);
     let view_dir = normalize(lighting_uniforms.view_position.xyz - position);
-    
+
     // Diffuse lighting
     let diffuse = max(dot(n, light_dir), 0.0);
-    
+
     // Simple specular (Blinn-Phong)
     let half_vec = normalize(light_dir + view_dir);
     let specular = pow(max(dot(n, half_vec), 0.0), 32.0);
-    
+
     // Ambient + diffuse + specular
     let ambient = 0.1;
     let lighting = ambient + diffuse * 0.8 + specular * 0.5;
-    
+
     // Apply lighting to albedo
     return vec4<f32>(albedo * lighting, 1.0);
 }
