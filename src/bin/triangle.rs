@@ -61,7 +61,7 @@ impl TriangleRenderer {
             .with_vertex_entry("vs_main")
             .with_fragment_entry("fs_main")
             .with_vertex_buffers(&[Some(PosColorVertex::desc())])
-            .with_color_format(surface_format.add_srgb_suffix())
+            .with_color_formats(&[surface_format.add_srgb_suffix()])
             .with_primitive(wgpu::PrimitiveState::default())
             .build();
 

@@ -9,9 +9,9 @@ use wgpu::VertexBufferLayout;
 pub mod primitives;
 
 /// Vertex with position and color attributes.
-/// 
+///
 /// Use case: Simple 2D/3D rendering without lighting (colored geometry).
-/// 
+///
 /// - `position` at shader location 0
 /// - `color` at shader location 1
 #[repr(C)]
@@ -44,9 +44,9 @@ impl PosColorVertex {
 }
 
 /// Vertex with position, color, and normal attributes.
-/// 
+///
 /// Use case: 3D rendering with lighting (per-vertex normals for diffuse lighting).
-/// 
+///
 /// - `position` at shader location 0
 /// - `color` at shader location 1
 /// - `normal` at shader location 2
@@ -82,22 +82,5 @@ impl PosColorNormalVertex {
                 },
             ],
         }
-    }
-}
-
-/// Trait for vertex types that can provide their vertex buffer layout description.
-pub trait VertexLayout {
-    fn desc() -> VertexBufferLayout<'static>;
-}
-
-impl VertexLayout for PosColorVertex {
-    fn desc() -> VertexBufferLayout<'static> {
-        Self::desc()
-    }
-}
-
-impl VertexLayout for PosColorNormalVertex {
-    fn desc() -> VertexBufferLayout<'static> {
-        Self::desc()
     }
 }

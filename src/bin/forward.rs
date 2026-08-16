@@ -20,7 +20,7 @@ use renderlib::camera::{Camera, GeometryUniform, LightingUniform};
 use renderlib::context::GraphicsContext;
 use renderlib::device_helpers::*;
 use renderlib::geometry::PosColorNormalVertex;
-use renderlib::mesh::load_gltf;
+use renderlib::mesh::load_mesh;
 
 /// Path to the shader file.
 const SHADER_PATH: &str = "src/shaders/forward.wgsl";
@@ -86,7 +86,7 @@ impl ForwardRenderer {
             .with_vertex_entry("vs_main")
             .with_fragment_entry("fs_main")
             .with_vertex_buffers(&[Some(PosColorNormalVertex::desc())])
-            .with_color_format(surface_format.add_srgb_suffix())
+            .with_color_formats(&[surface_format.add_srgb_suffix()])
             .with_primitive(wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,
                 strip_index_format: None,
@@ -114,33 +114,25 @@ impl AppRenderer for ForwardRenderer {
         let device = &context.device;
 
         // Load mesh using framework, or fall back to cube if file doesn't exist
-        let (vertices, indices, model_scale, mesh_center) = match load_gltf(DEFAULT_MESH_PATH) {
-            Ok(mesh) => {
-                eprintln!(
-                    "Loaded GLTF mesh: {} vertices, {} indices, scale: {:.2}, center: ({:.2}, {:.2}, {:.2})",
-                    mesh.vertices.len(),
-                    mesh.indices.len(),
-                    mesh.scale,
-                    mesh.center.x,
-                    mesh.center.y,
-                    mesh.center.z
-                );
-                (mesh.vertices, mesh.indices, mesh.scale, mesh.center)
-            }
-            Err(e) => {
-                eprintln!("Failed to load mesh: {}", e);
-                eprintln!("Falling back to hardcoded cube.");
-                eprintln!(
-                    "To use a custom GLTF/GLB file, place it at '{}'",
-                    DEFAULT_MESH_PATH
-                );
-                // Fall back to the hardcoded cube from primitives
-                use renderlib::geometry::primitives;
-                let (v, i) = primitives::cube_vertices();
-                (v, i, 1.0, Vector3::new(0.0, 0.0, 0.0)) // Cube is already centered
-            }
-        };
+        let mesh = load_mesh(DEFAULT_MESH_PATH);
+        let vertices = mesh.vertices;
+        let indices = mesh.indices;
+        let model_scale = mesh.scale;
+        let mesh_center = mesh.center;
         let num_indices = indices.len() as u32;
+
+        // Log which mesh was loaded
+        if model_scale != 1.0 || mesh_center != Vector3::new(0.0, 0.0, 0.0) {
+            eprintln!(
+                "Loaded GLTF mesh: {} vertices, {} indices, scale: {:.2}, center: ({:.2}, {:.2}, {:.2})",
+                vertices.len(),
+                indices.len(),
+                model_scale,
+                mesh_center.x,
+                mesh_center.y,
+                mesh_center.z
+            );
+        }
 
         // Create vertex buffer
         let vertex_buffer = create_buffer_from_slice(

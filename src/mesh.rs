@@ -7,7 +7,7 @@ use cgmath::{Vector3, Zero};
 use gltf::mesh::util::ReadIndices;
 
 use crate::device_helpers::create_buffer_from_slice;
-use crate::geometry::PosColorNormalVertex;
+use crate::geometry::{primitives, PosColorNormalVertex};
 
 /// Bounding box for a mesh, used for calculating scale and center.
 #[derive(Debug, Clone, Copy)]
@@ -243,48 +243,6 @@ pub fn load_gltf(path: &str) -> Result<Mesh, MeshLoadError> {
         vertex_offset += num_positions as u32;
     }
 
-    // Calculate scale factor and center based on bounding box
-    let (scale, center) = if !all_positions.is_empty() {
-        let mut min_x = f32::INFINITY;
-        let mut max_x = f32::NEG_INFINITY;
-        let mut min_y = f32::INFINITY;
-        let mut max_y = f32::NEG_INFINITY;
-        let mut min_z = f32::INFINITY;
-        let mut max_z = f32::NEG_INFINITY;
-
-        for &[x, y, z] in &all_positions {
-            min_x = min_x.min(x);
-            max_x = max_x.max(x);
-            min_y = min_y.min(y);
-            max_y = max_y.max(y);
-            min_z = min_z.min(z);
-            max_z = max_z.max(z);
-        }
-
-        let width = max_x - min_x;
-        let height = max_y - min_y;
-        let depth = max_z - min_z;
-        let max_dim = width.max(height).max(depth);
-
-        // Scale to approximately fit in a 2x2x2 box
-        let scale = if max_dim > 0.0 && max_dim.is_finite() {
-            2.0 / max_dim
-        } else {
-            1.0
-        };
-
-        // Center is the midpoint of the bounding box
-        let center = Vector3::new(
-            (min_x + max_x) / 2.0,
-            (min_y + max_y) / 2.0,
-            (min_z + max_z) / 2.0,
-        );
-
-        (scale, center)
-    } else {
-        (1.0, Vector3::new(0.0, 0.0, 0.0))
-    };
-
     // Second pass: build vertices with normals and color
     let mut all_vertices: Vec<PosColorNormalVertex> = Vec::new();
 
@@ -323,36 +281,38 @@ pub fn load_gltf(path: &str) -> Result<Mesh, MeshLoadError> {
         return Err(MeshLoadError::NoVerticesLoaded);
     }
 
-    // Create bounding box
-    let min = Vector3::new(
-        all_positions
-            .iter()
-            .map(|p| p[0])
-            .fold(f32::INFINITY, f32::min),
-        all_positions
-            .iter()
-            .map(|p| p[1])
-            .fold(f32::INFINITY, f32::min),
-        all_positions
-            .iter()
-            .map(|p| p[2])
-            .fold(f32::INFINITY, f32::min),
-    );
-    let max = Vector3::new(
-        all_positions
-            .iter()
-            .map(|p| p[0])
-            .fold(f32::NEG_INFINITY, f32::max),
-        all_positions
-            .iter()
-            .map(|p| p[1])
-            .fold(f32::NEG_INFINITY, f32::max),
-        all_positions
-            .iter()
-            .map(|p| p[2])
-            .fold(f32::NEG_INFINITY, f32::max),
-    );
-    let bounding_box = BoundingBox::new(min, max);
+    // Calculate bounding box, scale, and center from all_positions (single calculation)
+    let (bounding_box, scale, center) = if !all_positions.is_empty() {
+        let mut min_x = f32::INFINITY;
+        let mut max_x = f32::NEG_INFINITY;
+        let mut min_y = f32::INFINITY;
+        let mut max_y = f32::NEG_INFINITY;
+        let mut min_z = f32::INFINITY;
+        let mut max_z = f32::NEG_INFINITY;
+
+        for &[x, y, z] in &all_positions {
+            min_x = min_x.min(x);
+            max_x = max_x.max(x);
+            min_y = min_y.min(y);
+            max_y = max_y.max(y);
+            min_z = min_z.min(z);
+            max_z = max_z.max(z);
+        }
+
+        let min = Vector3::new(min_x, min_y, min_z);
+        let max = Vector3::new(max_x, max_y, max_z);
+        let bounding_box = BoundingBox::new(min, max);
+        let scale = bounding_box.scale_factor();
+        let center = bounding_box.center();
+
+        (bounding_box, scale, center)
+    } else {
+        (
+            BoundingBox::new(Vector3::zero(), Vector3::zero()),
+            1.0,
+            Vector3::zero(),
+        )
+    };
 
     Ok(Mesh {
         vertices: all_vertices,
@@ -363,7 +323,7 @@ pub fn load_gltf(path: &str) -> Result<Mesh, MeshLoadError> {
     })
 }
 
-/// Load a mesh from a GLTF or GLB file, falling back to a default cube if loading fails.
+/// Load a mesh from a GLTF or GLB file, falling back to a built-in cube if loading fails.
 ///
 /// This is useful for demos where you want to provide a fallback if the asset is missing.
 ///
@@ -374,8 +334,17 @@ pub fn load_gltf(path: &str) -> Result<Mesh, MeshLoadError> {
 /// # Returns
 ///
 /// A `Mesh` containing the loaded vertices and indices, or a default cube if loading fails.
-pub fn load_gltf_with_fallback(path: &str) -> Result<Mesh, MeshLoadError> {
-    load_gltf(path)
+pub fn load_mesh(path: &str) -> Mesh {
+    match load_gltf(path) {
+        Ok(mesh) => mesh,
+        Err(e) => {
+            eprintln!("Failed to load mesh: {}", e);
+            eprintln!("Falling back to built-in cube.");
+            // Fall back to the hardcoded cube from primitives
+            let (vertices, indices) = primitives::cube_vertices();
+            Mesh::new(vertices, indices)
+        }
+    }
 }
 
 /// Vertex with just position for full-screen quad (2D coordinates).

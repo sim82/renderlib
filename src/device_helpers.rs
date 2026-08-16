@@ -195,14 +195,6 @@ impl<'a> RenderPipelineBuilder<'a> {
         self
     }
 
-    /// Set a single color format for the pipeline's target.
-    /// This is a convenience method for single-attachment pipelines.
-    /// Equivalent to `with_color_formats(&[format])`.
-    pub fn with_color_format(mut self, format: wgpu::TextureFormat) -> Self {
-        self.color_formats = vec![format];
-        self
-    }
-
     /// Set blend states for each color attachment.
     /// Each element corresponds to a color target.
     /// Use `None` for no blending, or `Some(blend_state)` for custom blending.
