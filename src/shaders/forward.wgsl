@@ -3,9 +3,19 @@ struct GeometryUniforms {
     model: mat4x4<f32>,
 };
 
+struct Light {
+    position: vec4<f32>,
+    color: vec4<f32>,
+};
+
+// Maximum number of lights - must match Rust MAX_LIGHTS constant
+const MAX_LIGHTS: u32 = 32;
+
 struct LightingUniforms {
     view_position: vec4<f32>,
-    light_position: vec4<f32>,
+    num_lights: u32,
+    _padding: vec2<f32>,
+    lights: array<Light, MAX_LIGHTS>,
 };
 
 struct VertexInput {
@@ -46,17 +56,27 @@ fn vs_main(
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    // Calculate lighting
-    let light_dir = normalize(lighting_uniforms.light_position.xyz - in.world_pos);
     let normal = normalize(in.normal);
-
-    // Diffuse lighting factor (dot product of normal and light direction)
-    let diffuse = max(dot(normal, light_dir), 0.0);
-
-    // Ambient + diffuse lighting
+    
+    // Start with ambient lighting
     let ambient = 0.1;
-    let lighting = ambient + diffuse * 0.8;
-
+    var lighting = vec3<f32>(ambient, ambient, ambient);
+    
+    // Accumulate lighting from all active light sources
+    for (var i: u32 = 0; i < lighting_uniforms.num_lights; i++) {
+        let light = lighting_uniforms.lights[i];
+        let light_dir = normalize(light.position.xyz - in.world_pos);
+        
+        // Diffuse lighting factor (dot product of normal and light direction)
+        let diffuse = max(dot(normal, light_dir), 0.0);
+        
+        // Add diffuse lighting with light color
+        lighting += diffuse * 0.8 * light.color.rgb;
+    }
+    
+    // Clamp lighting to prevent overexposure
+    lighting = clamp(lighting, vec3<f32>(0.0, 0.0, 0.0), vec3<f32>(1.0, 1.0, 1.0));
+    
     // Apply lighting to the face color
     return vec4<f32>(in.color * lighting, 1.0);
 }

@@ -16,7 +16,7 @@ use winit::event_loop::EventLoop;
 use winit::keyboard::Key;
 
 use renderlib::app::{App, AppRenderer};
-use renderlib::camera::{Camera, GeometryUniform, LightingUniform};
+use renderlib::camera::{Camera, GeometryUniform, Light, LightingUniform};
 use renderlib::context::GraphicsContext;
 use renderlib::device_helpers::*;
 use renderlib::geometry::{primitives, PosColorNormalVertex};
@@ -51,6 +51,10 @@ pub struct ForwardRenderer {
     /// Translation to center the mesh at origin (computed from bounding box center).
     mesh_center: Vector3<f32>,
     camera: Camera,
+    /// Array of lights for the scene.
+    lights: [Light; renderlib::camera::MAX_LIGHTS],
+    /// Number of active lights.
+    num_lights: u32,
 }
 
 impl ForwardRenderer {
@@ -175,11 +179,21 @@ impl AppRenderer for ForwardRenderer {
             wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         );
 
-        // Create lighting uniform buffer for view position and light position
+        // Create multiple lights for the scene
+        let mut lights: [Light; renderlib::camera::MAX_LIGHTS] = 
+            [Light::default(); renderlib::camera::MAX_LIGHTS];
+        lights[0] = Light::new([2.0, 3.0, 4.0], [1.0, 1.0, 1.0]);  // White light above and to the right
+        lights[1] = Light::new([-3.0, 2.0, 2.0], [1.0, 0.0, 0.0]);  // Red light to the left
+        lights[2] = Light::new([0.0, -2.0, 3.0], [0.0, 0.0, 1.0]); // Blue light below
+        lights[3] = Light::new([0.0, 2.0, -3.0], [0.0, 1.0, 0.0]); // Green light behind
+        let num_lights = 4u32;
+
+        // Create lighting uniform buffer for view position and all lights
+        let lighting_uniform = LightingUniform::new_with_lights(&camera, &lights[..num_lights as usize]);
         let lighting_uniform_buffer = create_buffer(
             device,
             Some("Lighting Uniform Buffer"),
-            &LightingUniform::new(&camera, [2.0, 3.0, 4.0]),
+            &lighting_uniform,
             wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         );
 
@@ -249,6 +263,8 @@ impl AppRenderer for ForwardRenderer {
             model_scale,
             mesh_center,
             camera,
+            lights,
+            num_lights,
         }
     }
 
@@ -286,8 +302,11 @@ impl AppRenderer for ForwardRenderer {
             bytemuck::cast_slice(&[geometry_uniform]),
         );
 
-        // Update lighting uniform buffer
-        let lighting_uniform = LightingUniform::new(&self.camera, [2.0, 3.0, 4.0]);
+        // Update lighting uniform buffer with all lights
+        let lighting_uniform = LightingUniform::new_with_lights(
+            &self.camera, 
+            &self.lights[..self.num_lights as usize]
+        );
         context.queue.write_buffer(
             &self.lighting_uniform_buffer,
             0,

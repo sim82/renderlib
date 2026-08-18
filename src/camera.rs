@@ -5,6 +5,10 @@
 
 use cgmath::{Deg, InnerSpace, Matrix4, Point3, Rad, SquareMatrix, Transform as _, Vector3};
 
+/// Maximum number of lights supported by the rendering system.
+/// This is limited by uniform buffer size constraints in WebGPU/WGPU.
+pub const MAX_LIGHTS: usize = 32;
+
 /// Default camera configuration values.
 pub mod defaults {
     use cgmath::{Point3, Vector3};
@@ -446,31 +450,134 @@ impl GeometryUniform {
     }
 }
 
+/// A single light source for rendering.
+///
+/// Contains position, color, and intensity for lighting calculations.
+/// Padded to 32 bytes for std140 uniform buffer layout alignment.
+///
+/// # Layout (std140)
+/// - position: vec4 (16 bytes)
+/// - color: vec4 (16 bytes)
+/// - Total: 32 bytes
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct Light {
+    /// Light position in world space (xyz), w unused.
+    pub position: [f32; 4],
+    /// Light color as RGB (xyz), intensity multiplier in w or use separate intensity field.
+    pub color: [f32; 4],
+}
+
+impl Default for Light {
+    fn default() -> Self {
+        Self {
+            position: [0.0, 0.0, 0.0, 0.0],
+            color: [1.0, 1.0, 1.0, 1.0],
+        }
+    }
+}
+
+impl Light {
+    /// Creates a new light with the given position and color.
+    /// 
+    /// # Arguments
+    /// * `position` - Light position in world space (x, y, z)
+    /// * `color` - Light color as RGB values (r, g, b)
+    pub fn new(position: [f32; 3], color: [f32; 3]) -> Self {
+        Self {
+            position: [position[0], position[1], position[2], 0.0],
+            color: [color[0], color[1], color[2], 1.0],
+        }
+    }
+
+    /// Creates a new light with the given position, color, and intensity.
+    /// 
+    /// # Arguments
+    /// * `position` - Light position in world space (x, y, z)
+    /// * `color` - Light color as RGB values (r, g, b)
+    /// * `intensity` - Light intensity multiplier
+    pub fn with_intensity(position: [f32; 3], color: [f32; 3], intensity: f32) -> Self {
+        Self {
+            position: [position[0], position[1], position[2], 0.0],
+            color: [color[0] * intensity, color[1] * intensity, color[2] * intensity, 1.0],
+        }
+    }
+}
+
 /// Lighting parameters for fragment shading.
 ///
-/// Contains camera position and light position for lighting calculations.
+/// Contains camera position and an array of light sources for lighting calculations.
 /// Used in the lighting pass of deferred rendering or in forward rendering.
 ///
 /// # Layout (std140)
 /// - view_position: vec4 (16 bytes)
-/// - light_position: vec4 (16 bytes)
-/// - Total: 32 bytes
+/// - num_lights: u32 + padding (8 bytes to align to 16)
+/// - lights: array of Light (32 bytes each)
+/// - Total: 16 + 8 + (32 * MAX_LIGHTS) bytes
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct LightingUniform {
     /// Camera position in world space (used for specular highlights).
     pub view_position: [f32; 4],
-    /// Light position in world space.
-    pub light_position: [f32; 4],
+    /// Number of active lights in the lights array.
+    pub num_lights: u32,
+    /// Padding to maintain 16-byte alignment for the lights array.
+    pub _padding: [f32; 3],
+    /// Array of light sources.
+    pub lights: [Light; MAX_LIGHTS],
+}
+
+impl Default for LightingUniform {
+    fn default() -> Self {
+        Self {
+            view_position: [0.0, 0.0, 0.0, 0.0],
+            num_lights: 0,
+            _padding: [0.0, 0.0, 0.0],
+            lights: [Light::default(); MAX_LIGHTS],
+        }
+    }
 }
 
 impl LightingUniform {
-    /// Creates a lighting uniform from camera and light position.
+    /// Creates a lighting uniform from camera and a single light position.
+    /// For backwards compatibility with existing code.
     pub fn new(camera: &Camera, light_position: [f32; 3]) -> Self {
-        Self {
-            view_position: [camera.position.x, camera.position.y, camera.position.z, 0.0],
-            light_position: [light_position[0], light_position[1], light_position[2], 0.0],
+        let mut uniform = Self::default();
+        uniform.view_position = [camera.position.x, camera.position.y, camera.position.z, 0.0];
+        uniform.num_lights = 1;
+        uniform.lights[0] = Light::new(light_position, [1.0, 1.0, 1.0]);
+        uniform
+    }
+
+    /// Creates a lighting uniform from camera and an array of lights.
+    /// 
+    /// # Arguments
+    /// * `camera` - The camera
+    /// * `lights` - Slice of Light structs to include (up to MAX_LIGHTS)
+    pub fn new_with_lights(camera: &Camera, lights: &[Light]) -> Self {
+        let mut uniform = Self::default();
+        uniform.view_position = [camera.position.x, camera.position.y, camera.position.z, 0.0];
+        
+        let count = lights.len().min(MAX_LIGHTS);
+        uniform.num_lights = count as u32;
+        for (i, &light) in lights.iter().take(count).enumerate() {
+            uniform.lights[i] = light;
         }
+        uniform
+    }
+
+    /// Creates a lighting uniform with multiple light positions (for convenience).
+    /// All lights will have white color (1.0, 1.0, 1.0).
+    /// 
+    /// # Arguments
+    /// * `camera` - The camera
+    /// * `light_positions` - Array of light positions (x, y, z)
+    pub fn new_with_positions(camera: &Camera, light_positions: &[[f32; 3]]) -> Self {
+        let lights: Vec<Light> = light_positions
+            .iter()
+            .map(|&pos| Light::new(pos, [1.0, 1.0, 1.0]))
+            .collect();
+        Self::new_with_lights(camera, &lights)
     }
 }
 

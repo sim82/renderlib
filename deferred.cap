@@ -5,7 +5,7 @@
         "commandLine": "",
         "environment": [
         ],
-        "executable": "/home/sim/src/renderlib/target/debug/gltf_deferred",
+        "executable": "/home/sim/src/renderlib/target/debug/deferred",
         "inject": false,
         "numQueuedFrames": 0,
         "options": {
