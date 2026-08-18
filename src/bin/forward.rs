@@ -179,17 +179,17 @@ impl AppRenderer for ForwardRenderer {
             wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         );
 
-        // Create multiple lights for the scene
+        // Create multiple lights for the scene with radii for culling
         let mut lights: [Light; renderlib::camera::MAX_LIGHTS] = 
             [Light::default(); renderlib::camera::MAX_LIGHTS];
-        lights[0] = Light::new([2.0, 3.0, 4.0], [1.0, 1.0, 1.0]);  // White light above and to the right
-        lights[1] = Light::new([-3.0, 2.0, 2.0], [1.0, 0.0, 0.0]);  // Red light to the left
-        lights[2] = Light::new([0.0, -2.0, 3.0], [0.0, 0.0, 1.0]); // Blue light below
-        lights[3] = Light::new([0.0, 2.0, -3.0], [0.0, 1.0, 0.0]); // Green light behind
+        lights[0] = Light::with_radius([2.0, 3.0, 4.0], [1.0, 1.0, 1.0], 5.0);  // White light above and to the right
+        lights[1] = Light::with_radius([-3.0, 2.0, 2.0], [1.0, 0.0, 0.0], 5.0);  // Red light to the left
+        lights[2] = Light::with_radius([0.0, -2.0, 3.0], [0.0, 0.0, 1.0], 5.0); // Blue light below
+        lights[3] = Light::with_radius([0.0, 2.0, -3.0], [0.0, 1.0, 0.0], 5.0); // Green light behind
         let num_lights = 4u32;
 
         // Create lighting uniform buffer for view position and all lights
-        let lighting_uniform = LightingUniform::new_with_lights(&camera, &lights[..num_lights as usize]);
+        let lighting_uniform = LightingUniform::new_with_lights(&camera, &lights[..num_lights as usize], aspect);
         let lighting_uniform_buffer = create_buffer(
             device,
             Some("Lighting Uniform Buffer"),
@@ -302,10 +302,12 @@ impl AppRenderer for ForwardRenderer {
             bytemuck::cast_slice(&[geometry_uniform]),
         );
 
-        // Update lighting uniform buffer with all lights
+        // Update lighting uniform buffer with all lights and current aspect ratio
+        let aspect = context.size.width as f32 / context.size.height as f32;
         let lighting_uniform = LightingUniform::new_with_lights(
             &self.camera, 
-            &self.lights[..self.num_lights as usize]
+            &self.lights[..self.num_lights as usize],
+            aspect
         );
         context.queue.write_buffer(
             &self.lighting_uniform_buffer,

@@ -77,7 +77,7 @@ pub struct DeferredRenderer {
 
     // Camera
     camera: Camera,
-    
+
     // Lighting
     lights: [Light; renderlib::camera::MAX_LIGHTS],
     num_lights: u32,
@@ -306,17 +306,22 @@ impl AppRenderer for DeferredRenderer {
         )
         .expect("Failed to create geometry pipeline");
 
-        // Create multiple lights for the scene
-        let mut lights: [Light; renderlib::camera::MAX_LIGHTS] = 
+        // Create multiple lights for the scene with radii for culling
+        let mut lights: [Light; renderlib::camera::MAX_LIGHTS] =
             [Light::default(); renderlib::camera::MAX_LIGHTS];
-        lights[0] = Light::new([2.0, 3.0, 4.0], [1.0, 1.0, 1.0]);  // White light above and to the right
-        lights[1] = Light::new([-3.0, 2.0, 2.0], [1.0, 0.0, 0.0]);  // Red light to the left
-        lights[2] = Light::new([0.0, -2.0, 3.0], [0.0, 0.0, 1.0]); // Blue light below
-        lights[3] = Light::new([0.0, 2.0, -3.0], [0.0, 1.0, 0.0]); // Green light behind
+        lights[0] = Light::with_radius([2.0, 3.0, 4.0], [1.0, 1.0, 1.0], 50.0); // White light above and to the right
+        lights[1] = Light::with_radius([-3.0, 2.0, 2.0], [1.0, 0.0, 0.0], 50.0); // Red light to the left
+
+        lights[2] = Light::with_radius([0.0, -2.0, 3.0], [0.0, 0.0, 1.0], 50.0); // Blue light below
+        lights[3] = Light::with_radius([0.0, 2.0, -3.0], [0.0, 1.0, 0.0], 50.0); // Green light behind
         let num_lights = 4u32;
 
-        // Create lighting pass uniform buffer
-        let lighting_uniform_init = LightingUniform::new_with_lights(&camera, &lights[..num_lights as usize]);
+        // Calculate aspect ratio
+        let aspect = size.width as f32 / size.height as f32;
+
+        // Create lighting pass uniform buffer with aspect ratio for view-projection
+        let lighting_uniform_init =
+            LightingUniform::new_with_lights(&camera, &lights[..num_lights as usize], aspect);
         let lighting_uniform_buffer = create_buffer(
             device,
             Some("Lighting Uniform Buffer"),
@@ -439,10 +444,12 @@ impl AppRenderer for DeferredRenderer {
             bytemuck::cast_slice(&[geometry_uniform]),
         );
 
-        // Update lighting uniform buffer with all lights
+        // Update lighting uniform buffer with all lights and current aspect ratio
+        let aspect = context.size.width as f32 / context.size.height as f32;
         let lighting_uniform = LightingUniform::new_with_lights(
-            &self.camera, 
-            &self.lights[..self.num_lights as usize]
+            &self.camera,
+            &self.lights[..self.num_lights as usize],
+            aspect,
         );
         context.queue.write_buffer(
             &self.lighting_uniform_buffer,

@@ -479,49 +479,111 @@ impl Default for Light {
 
 impl Light {
     /// Creates a new light with the given position and color.
-    /// 
+    /// Uses a default radius of 10.0 for screen-space culling.
+    ///
     /// # Arguments
     /// * `position` - Light position in world space (x, y, z)
     /// * `color` - Light color as RGB values (r, g, b)
     pub fn new(position: [f32; 3], color: [f32; 3]) -> Self {
         Self {
-            position: [position[0], position[1], position[2], 0.0],
+            position: [position[0], position[1], position[2], 10.0], // w stores radius
+            color: [color[0], color[1], color[2], 1.0],
+        }
+    }
+
+    /// Creates a new light with the given position, color, and influence radius.
+    ///
+    /// # Arguments
+    /// * `position` - Light position in world space (x, y, z)
+    /// * `color` - Light color as RGB values (r, g, b)
+    /// * `radius` - Light influence radius in world space units
+    pub fn with_radius(position: [f32; 3], color: [f32; 3], radius: f32) -> Self {
+        Self {
+            position: [position[0], position[1], position[2], radius],
             color: [color[0], color[1], color[2], 1.0],
         }
     }
 
     /// Creates a new light with the given position, color, and intensity.
-    /// 
+    /// Uses a default radius of 10.0.
+    ///
     /// # Arguments
     /// * `position` - Light position in world space (x, y, z)
     /// * `color` - Light color as RGB values (r, g, b)
     /// * `intensity` - Light intensity multiplier
     pub fn with_intensity(position: [f32; 3], color: [f32; 3], intensity: f32) -> Self {
         Self {
-            position: [position[0], position[1], position[2], 0.0],
-            color: [color[0] * intensity, color[1] * intensity, color[2] * intensity, 1.0],
+            position: [position[0], position[1], position[2], 10.0],
+            color: [
+                color[0] * intensity,
+                color[1] * intensity,
+                color[2] * intensity,
+                1.0,
+            ],
         }
+    }
+
+    /// Creates a new light with full control over all parameters.
+    ///
+    /// # Arguments
+    /// * `position` - Light position in world space (x, y, z)
+    /// * `color` - Light color as RGB values (r, g, b)
+    /// * `intensity` - Light intensity multiplier
+    /// * `radius` - Light influence radius in world space units
+    pub fn with_all(position: [f32; 3], color: [f32; 3], intensity: f32, radius: f32) -> Self {
+        Self {
+            position: [position[0], position[1], position[2], radius],
+            color: [
+                color[0] * intensity,
+                color[1] * intensity,
+                color[2] * intensity,
+                1.0,
+            ],
+        }
+    }
+
+    /// Get the light's position as a 3-component array.
+    pub fn get_position(&self) -> [f32; 3] {
+        [self.position[0], self.position[1], self.position[2]]
+    }
+
+    /// Get the light's influence radius (stored in position.w).
+    pub fn get_radius(&self) -> f32 {
+        self.position[3]
+    }
+
+    /// Get the light's color as a 3-component array (RGB).
+    pub fn get_color(&self) -> [f32; 3] {
+        [self.color[0], self.color[1], self.color[2]]
     }
 }
 
 /// Lighting parameters for fragment shading.
 ///
-/// Contains camera position and an array of light sources for lighting calculations.
-/// Used in the lighting pass of deferred rendering or in forward rendering.
+/// Contains camera position, view-projection matrix, and an array of light sources
+/// for lighting calculations. Used in the lighting pass of deferred rendering or
+/// in forward rendering.
 ///
 /// # Layout (std140)
+/// WGSL std140 layout requires specific padding to match shader expectations.
 /// - view_position: vec4 (16 bytes)
-/// - num_lights: u32 + padding (8 bytes to align to 16)
-/// - lights: array of Light (32 bytes each)
-/// - Total: 16 + 8 + (32 * MAX_LIGHTS) bytes
+/// - view_projection: mat4x4 (64 bytes = 4 * vec4)
+/// - num_lights: u32 (4 bytes)
+/// - _padding: vec3 (12 bytes)
+/// - _extra_padding: vec4 (16 bytes)
+/// - _extra_padding2: vec4 (16 bytes) - additional padding for WGSL std140
+/// - lights: array of Light (32 bytes each, 32 * MAX_LIGHTS = 1024 bytes)
+/// - Total: 16 + 64 + 4 + 12 + 16 + 16 + 1024 = 1152 bytes
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct LightingUniform {
     /// Camera position in world space (used for specular highlights).
     pub view_position: [f32; 4],
+    /// View-projection matrix for screen-space calculations (e.g., light culling).
+    pub view_projection: [[f32; 4]; 4],
     /// Number of active lights in the lights array.
     pub num_lights: u32,
-    /// Padding to maintain 16-byte alignment for the lights array.
+    /// 12 bytes padding
     pub _padding: [f32; 3],
     /// Array of light sources.
     pub lights: [Light; MAX_LIGHTS],
@@ -531,8 +593,14 @@ impl Default for LightingUniform {
     fn default() -> Self {
         Self {
             view_position: [0.0, 0.0, 0.0, 0.0],
+            view_projection: [
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ],
             num_lights: 0,
-            _padding: [0.0, 0.0, 0.0],
+            _padding: [0.0; 3],
             lights: [Light::default(); MAX_LIGHTS],
         }
     }
@@ -541,23 +609,31 @@ impl Default for LightingUniform {
 impl LightingUniform {
     /// Creates a lighting uniform from camera and a single light position.
     /// For backwards compatibility with existing code.
-    pub fn new(camera: &Camera, light_position: [f32; 3]) -> Self {
+    ///
+    /// # Arguments
+    /// * `camera` - The camera
+    /// * `light_position` - Position of the single light
+    /// * `aspect_ratio` - Screen aspect ratio for view-projection matrix
+    pub fn new(camera: &Camera, light_position: [f32; 3], aspect_ratio: f32) -> Self {
         let mut uniform = Self::default();
         uniform.view_position = [camera.position.x, camera.position.y, camera.position.z, 0.0];
+        uniform.view_projection = camera.get_view_projection_matrix(aspect_ratio).into();
         uniform.num_lights = 1;
         uniform.lights[0] = Light::new(light_position, [1.0, 1.0, 1.0]);
         uniform
     }
 
     /// Creates a lighting uniform from camera and an array of lights.
-    /// 
+    ///
     /// # Arguments
     /// * `camera` - The camera
     /// * `lights` - Slice of Light structs to include (up to MAX_LIGHTS)
-    pub fn new_with_lights(camera: &Camera, lights: &[Light]) -> Self {
+    /// * `aspect_ratio` - Screen aspect ratio for view-projection matrix
+    pub fn new_with_lights(camera: &Camera, lights: &[Light], aspect_ratio: f32) -> Self {
         let mut uniform = Self::default();
         uniform.view_position = [camera.position.x, camera.position.y, camera.position.z, 0.0];
-        
+        uniform.view_projection = camera.get_view_projection_matrix(aspect_ratio).into();
+
         let count = lights.len().min(MAX_LIGHTS);
         uniform.num_lights = count as u32;
         for (i, &light) in lights.iter().take(count).enumerate() {
@@ -568,16 +644,21 @@ impl LightingUniform {
 
     /// Creates a lighting uniform with multiple light positions (for convenience).
     /// All lights will have white color (1.0, 1.0, 1.0).
-    /// 
+    ///
     /// # Arguments
     /// * `camera` - The camera
     /// * `light_positions` - Array of light positions (x, y, z)
-    pub fn new_with_positions(camera: &Camera, light_positions: &[[f32; 3]]) -> Self {
+    /// * `aspect_ratio` - Screen aspect ratio for view-projection matrix
+    pub fn new_with_positions(
+        camera: &Camera,
+        light_positions: &[[f32; 3]],
+        aspect_ratio: f32,
+    ) -> Self {
         let lights: Vec<Light> = light_positions
             .iter()
             .map(|&pos| Light::new(pos, [1.0, 1.0, 1.0]))
             .collect();
-        Self::new_with_lights(camera, &lights)
+        Self::new_with_lights(camera, &lights, aspect_ratio)
     }
 }
 

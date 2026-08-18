@@ -4,7 +4,7 @@ struct GeometryUniforms {
 };
 
 struct Light {
-    position: vec4<f32>,
+    position: vec4<f32>,  // xyz = position, w = radius
     color: vec4<f32>,
 };
 
@@ -13,8 +13,9 @@ const MAX_LIGHTS: u32 = 32;
 
 struct LightingUniforms {
     view_position: vec4<f32>,
+    view_projection: mat4x4<f32>,
     num_lights: u32,
-    _padding: vec2<f32>,
+    // 12 bytes padding
     lights: array<Light, MAX_LIGHTS>,
 };
 
@@ -57,26 +58,33 @@ fn vs_main(
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let normal = normalize(in.normal);
-    
+
     // Start with ambient lighting
     let ambient = 0.1;
     var lighting = vec3<f32>(ambient, ambient, ambient);
-    
+
     // Accumulate lighting from all active light sources
     for (var i: u32 = 0; i < lighting_uniforms.num_lights; i++) {
         let light = lighting_uniforms.lights[i];
+
+        // Note: Screen-space culling is disabled for forward rendering
+        // because it requires UV coordinates in the fragment shader.
+        // The culling is implemented in deferred_lighting.wgsl where we have
+        // full-screen UV from the quad vertices.
+
+        // Calculate lighting for all lights
         let light_dir = normalize(light.position.xyz - in.world_pos);
-        
+
         // Diffuse lighting factor (dot product of normal and light direction)
         let diffuse = max(dot(normal, light_dir), 0.0);
-        
+
         // Add diffuse lighting with light color
         lighting += diffuse * 0.8 * light.color.rgb;
     }
-    
+
     // Clamp lighting to prevent overexposure
     lighting = clamp(lighting, vec3<f32>(0.0, 0.0, 0.0), vec3<f32>(1.0, 1.0, 1.0));
-    
+
     // Apply lighting to the face color
     return vec4<f32>(in.color * lighting, 1.0);
 }
