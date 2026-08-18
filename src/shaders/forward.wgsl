@@ -73,13 +73,23 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // full-screen UV from the quad vertices.
 
         // Calculate lighting for all lights
-        let light_dir = normalize(light.position.xyz - in.world_pos);
+        let light_pos = light.position.xyz;
+        let light_radius = light.position.w;
+        
+        let light_dir = normalize(light_pos - in.world_pos);
+        let distance = length(light_pos - in.world_pos);
+
+        // Polynomial falloff: 1.0 at distance=0, 0.0 at distance=light_radius
+        // This gives a smooth quadratic transition where light contribution falls to zero
+        // exactly at the specified radius
+        let t = distance / light_radius;
+        let falloff = max(1.0 - t * t, 0.0);
 
         // Diffuse lighting factor (dot product of normal and light direction)
         let diffuse = max(dot(normal, light_dir), 0.0);
 
-        // Add diffuse lighting with light color
-        lighting += diffuse * 0.8 * light.color.rgb;
+        // Add diffuse lighting with light color and falloff
+        lighting += diffuse * 0.8 * light.color.rgb * falloff;
     }
 
     // Clamp lighting to prevent overexposure

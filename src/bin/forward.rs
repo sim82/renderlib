@@ -180,12 +180,13 @@ impl AppRenderer for ForwardRenderer {
         );
 
         // Create multiple lights for the scene with radii for culling
+        // Radius defines where light contribution falls to zero (polynomial falloff)
         let mut lights: [Light; renderlib::camera::MAX_LIGHTS] = 
             [Light::default(); renderlib::camera::MAX_LIGHTS];
-        lights[0] = Light::with_radius([2.0, 3.0, 4.0], [1.0, 1.0, 1.0], 5.0);  // White light above and to the right
-        lights[1] = Light::with_radius([-3.0, 2.0, 2.0], [1.0, 0.0, 0.0], 5.0);  // Red light to the left
-        lights[2] = Light::with_radius([0.0, -2.0, 3.0], [0.0, 0.0, 1.0], 5.0); // Blue light below
-        lights[3] = Light::with_radius([0.0, 2.0, -3.0], [0.0, 1.0, 0.0], 5.0); // Green light behind
+        lights[0] = Light::with_radius([2.0, 3.0, 4.0], [1.0, 1.0, 1.0], 15.0);  // White light above and to the right
+        lights[1] = Light::with_radius([-3.0, 2.0, 2.0], [1.0, 0.0, 0.0], 15.0);  // Red light to the left
+        lights[2] = Light::with_radius([0.0, -2.0, 3.0], [0.0, 0.0, 1.0], 15.0); // Blue light below
+        lights[3] = Light::with_radius([0.0, 2.0, -3.0], [0.0, 1.0, 0.0], 15.0); // Green light behind
         let num_lights = 4u32;
 
         // Create lighting uniform buffer for view position and all lights
