@@ -73,6 +73,38 @@ pub struct Camera {
     pub far: f32,
 }
 
+impl Camera {
+    pub fn move_forward(&mut self, distance: f32) {
+        let forward = (self.target - self.position).normalize();
+        self.position += forward * distance;
+        self.target += forward * distance;
+    }
+
+    pub fn move_backward(&mut self, distance: f32) {
+        let forward = (self.target - self.position).normalize();
+        self.position -= forward * distance;
+        self.target -= forward * distance;
+    }
+
+    pub fn move_left(&mut self, distance: f32) {
+        let right = self
+            .up
+            .cross((self.target - self.position).normalize())
+            .normalize();
+        self.position -= right * distance;
+        self.target -= right * distance;
+    }
+
+    pub fn move_right(&mut self, distance: f32) {
+        let right = self
+            .up
+            .cross((self.target - self.position).normalize())
+            .normalize();
+        self.position += right * distance;
+        self.target += right * distance;
+    }
+}
+
 impl Default for Camera {
     fn default() -> Self {
         Self {
