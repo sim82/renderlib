@@ -403,8 +403,8 @@ impl AppRenderer for DeferredRenderer {
             .as_secs_f32();
         self.last_frame_time = current_time;
 
-        // Create player input from input controller
-        let player_input = PlayerInput::from_input_controller(&self.input_controller);
+        // Create player input from input controller (takes mouse delta)
+        let player_input = PlayerInput::from_input_controller(&mut self.input_controller);
 
         // Update player position based on input
         self.player.update(&player_input, delta_time);

@@ -3,10 +3,10 @@
 //! Provides player state management for frame-rate independent movement
 //! and camera control in 3D applications.
 
-use cgmath::{InnerSpace, Point3, Vector3};
+use cgmath::{InnerSpace, Matrix3, Point3, Rad, Vector3};
 
 use crate::camera::Camera;
-use crate::input::InputController;
+use crate::input::{InputController, MouseDelta};
 
 /// Movement speed in units per second.
 const DEFAULT_MOVE_SPEED: f32 = 2.5;
@@ -19,22 +19,28 @@ const DEFAULT_DECELERATION: f32 = 10.0;
 /// Higher values mean faster acceleration.
 const DEFAULT_ACCELERATION: f32 = 20.0;
 
+/// Mouse look sensitivity (radians per pixel).
+/// Controls how much the camera rotates per pixel of mouse movement.
+const DEFAULT_MOUSE_SENSITIVITY: f32 = 0.002;
+
 /// A self-contained representation of player input state for a single frame.
 ///
-/// This struct captures the current input state (which movement keys are pressed)
-/// at a point in time, allowing it to be applied to a PlayerState. This design
-/// enables features like recording and replaying input, or applying the same
-/// input to multiple players.
+/// This struct captures the current input state (which movement keys are pressed
+/// and mouse movement) at a point in time, allowing it to be applied to a PlayerState.
+/// This design enables features like recording and replaying input, or applying
+/// the same input to multiple players.
 ///
 /// # Example
 ///
 /// ```ignore
 /// use renderlib::player::{PlayerState, PlayerInput};
+/// use renderlib::input::MouseDelta;
 ///
 /// // Create input state for this frame
 /// let input = PlayerInput::new()
 ///     .with_move_forward(true)
-///     .with_move_right(true);
+///     .with_move_right(true)
+///     .with_mouse_delta(MouseDelta::new_with(10.0, 5.0));
 ///
 /// // Apply to player
 /// player.apply_input(&input, delta_time);
@@ -49,29 +55,33 @@ pub struct PlayerInput {
     pub move_left: bool,
     /// Whether the player should move right.
     pub move_right: bool,
+    /// Mouse movement delta for this frame (pixels).
+    pub mouse_delta: MouseDelta,
 }
 
 impl PlayerInput {
-    /// Creates a new PlayerInput with all movement flags set to false.
+    /// Creates a new PlayerInput with all movement flags set to false and zero mouse delta.
     pub fn new() -> Self {
         Self {
             move_forward: false,
             move_backward: false,
             move_left: false,
             move_right: false,
+            mouse_delta: MouseDelta::new(),
         }
     }
 
     /// Creates a PlayerInput from an InputController.
     ///
     /// This is a convenience method to create a PlayerInput from the current
-    /// state of an InputController.
-    pub fn from_input_controller(input: &InputController) -> Self {
+    /// state of an InputController. It also takes the mouse delta from the controller.
+    pub fn from_input_controller(input: &mut InputController) -> Self {
         Self {
             move_forward: input.is_key_pressed("w"),
             move_backward: input.is_key_pressed("s"),
             move_left: input.is_key_pressed("a"),
             move_right: input.is_key_pressed("d"),
+            mouse_delta: input.take_mouse_delta(),
         }
     }
 
@@ -96,6 +106,12 @@ impl PlayerInput {
     /// Sets whether the player should move right.
     pub fn with_move_right(mut self, value: bool) -> Self {
         self.move_right = value;
+        self
+    }
+
+    /// Sets the mouse delta for this input.
+    pub fn with_mouse_delta(mut self, delta: MouseDelta) -> Self {
+        self.mouse_delta = delta;
         self
     }
 }
@@ -138,6 +154,8 @@ pub struct PlayerState {
     pub acceleration: f32,
     /// Deceleration rate in units per second per second.
     pub deceleration: f32,
+    /// Mouse look sensitivity in radians per pixel.
+    pub mouse_sensitivity: f32,
 }
 
 impl Default for PlayerState {
@@ -160,6 +178,7 @@ impl PlayerState {
             max_move_speed: DEFAULT_MOVE_SPEED,
             acceleration: DEFAULT_ACCELERATION,
             deceleration: DEFAULT_DECELERATION,
+            mouse_sensitivity: DEFAULT_MOUSE_SENSITIVITY,
         }
     }
 
@@ -173,6 +192,7 @@ impl PlayerState {
             max_move_speed: DEFAULT_MOVE_SPEED,
             acceleration: DEFAULT_ACCELERATION,
             deceleration: DEFAULT_DECELERATION,
+            mouse_sensitivity: DEFAULT_MOUSE_SENSITIVITY,
         }
     }
 
@@ -186,21 +206,28 @@ impl PlayerState {
             max_move_speed: DEFAULT_MOVE_SPEED,
             acceleration: DEFAULT_ACCELERATION,
             deceleration: DEFAULT_DECELERATION,
+            mouse_sensitivity: DEFAULT_MOUSE_SENSITIVITY,
         }
     }
 
-    /// Updates the player's position based on input state and delta time.
+    /// Updates the player's position and orientation based on input state and delta time.
     ///
     /// This method should be called once per frame with the current input state
-    /// and the time elapsed since the last frame. It updates the velocity with
-    /// gradual acceleration and deceleration, then applies the velocity to the position.
+    /// and the time elapsed since the last frame. It updates the orientation based
+    /// on mouse movement, then updates the velocity with gradual acceleration and
+    /// deceleration, and finally applies the velocity to the position.
     ///
     /// # Arguments
     ///
-    /// * `input` - The PlayerInput containing current movement state
+    /// * `input` - The PlayerInput containing current movement state and mouse delta
     /// * `delta_time` - Time elapsed since the last frame, in seconds
     pub fn update(&mut self, input: &PlayerInput, delta_time: f32) {
-        // Calculate right vector from forward and up
+        // Handle mouse look first (rotate forward and up vectors)
+        if input.mouse_delta.x != 0.0 || input.mouse_delta.y != 0.0 {
+            self.apply_mouse_look(&input.mouse_delta);
+        }
+
+        // Calculate right vector from forward and up (needs to be recalculated after mouse look)
         let right = self.up.cross(self.forward).normalize();
 
         // Build target movement direction from input
@@ -268,6 +295,35 @@ impl PlayerState {
         self.position += self.velocity * delta_time;
     }
 
+    /// Applies mouse look rotation to the player's orientation.
+    ///
+    /// This rotates the forward and up vectors based on mouse movement.
+    /// - Horizontal mouse movement (x) rotates around the up vector (yaw)
+    /// - Vertical mouse movement (y) rotates around the right vector (pitch)
+    ///
+    /// # Arguments
+    ///
+    /// * `mouse_delta` - The mouse movement delta in pixels
+    fn apply_mouse_look(&mut self, mouse_delta: &MouseDelta) {
+        // Calculate rotation amounts based on mouse delta and sensitivity
+        let yaw_angle = Rad(-mouse_delta.x * self.mouse_sensitivity);
+        let pitch_angle = Rad(-mouse_delta.y * self.mouse_sensitivity);
+
+        // Rotate forward vector around up vector (yaw)
+        let yaw_rotation = Matrix3::from_axis_angle(self.up, yaw_angle);
+        self.forward = yaw_rotation * self.forward;
+
+        // Calculate right vector after yaw rotation
+        let right = self.up.cross(self.forward).normalize();
+
+        // Rotate forward vector around right vector (pitch)
+        let pitch_rotation = Matrix3::from_axis_angle(right, pitch_angle);
+        self.forward = pitch_rotation * self.forward;
+
+        // Ensure forward vector stays normalized
+        self.forward = self.forward.normalize();
+    }
+
     /// Applies a PlayerInput to update the player's position.
     ///
     /// This is an alternative to `update` that takes a PlayerInput directly.
@@ -327,6 +383,16 @@ impl PlayerState {
     /// Gets the current deceleration rate.
     pub fn get_deceleration(&self) -> f32 {
         self.deceleration
+    }
+
+    /// Sets the mouse look sensitivity.
+    pub fn set_mouse_sensitivity(&mut self, sensitivity: f32) {
+        self.mouse_sensitivity = sensitivity;
+    }
+
+    /// Gets the current mouse look sensitivity.
+    pub fn get_mouse_sensitivity(&self) -> f32 {
+        self.mouse_sensitivity
     }
 
     /// Sets the current velocity.
@@ -536,11 +602,39 @@ mod tests {
     }
 
     #[test]
+    fn test_mouse_look() {
+        use super::super::input::MouseDelta;
+
+        let mut player = PlayerState::new();
+        let original_forward = player.forward;
+
+        // Create input with mouse movement
+        let input = PlayerInput::new().with_mouse_delta(MouseDelta::new_with(100.0, 50.0));
+
+        player.update(&input, 0.016); // ~60fps frame
+
+        // Forward vector should have changed
+        assert_ne!(player.forward, original_forward);
+
+        // Forward vector should still be normalized
+        let forward_magnitude = player.forward.magnitude();
+        assert!((forward_magnitude - 1.0).abs() < 0.0001);
+    }
+
+    #[test]
+    fn test_mouse_sensitivity_getter_setter() {
+        let mut player = PlayerState::new();
+
+        player.set_mouse_sensitivity(0.01);
+        assert_eq!(player.get_mouse_sensitivity(), 0.01);
+    }
+
+    #[test]
     fn test_from_input_controller() {
         use super::super::input::InputController;
 
-        let input_controller = InputController::new();
-        let player_input = PlayerInput::from_input_controller(&input_controller);
+        let mut input_controller = InputController::new();
+        let player_input = PlayerInput::from_input_controller(&mut input_controller);
 
         // With no keys pressed, all movement flags should be false
         assert!(!player_input.move_forward);
