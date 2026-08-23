@@ -8,6 +8,7 @@ use winit::{
     application::ApplicationHandler,
     event::WindowEvent,
     event_loop::ActiveEventLoop,
+    keyboard::{Key, NamedKey},
     window::{Window, WindowId},
 };
 
@@ -87,6 +88,14 @@ impl<R: AppRenderer + 'static> ApplicationHandler for App<R> {
         match event {
             WindowEvent::CloseRequested => {
                 event_loop.exit();
+            }
+            WindowEvent::KeyboardInput {
+                event: key_event, ..
+            } => {
+                // Exit on Escape key
+                if let Key::Named(NamedKey::Escape) = key_event.logical_key {
+                    event_loop.exit();
+                }
             }
             WindowEvent::RedrawRequested => {
                 renderer.render(context);

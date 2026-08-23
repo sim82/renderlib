@@ -223,6 +223,7 @@ impl PlayerState {
     /// * `delta_time` - Time elapsed since the last frame, in seconds
     pub fn update(&mut self, input: &PlayerInput, delta_time: f32) {
         // Handle mouse look first (rotate forward and up vectors)
+        // Mouse look is applied whenever there's mouse delta (filtering happens upstream)
         if input.mouse_delta.x != 0.0 || input.mouse_delta.y != 0.0 {
             self.apply_mouse_look(&input.mouse_delta);
         }
@@ -608,7 +609,7 @@ mod tests {
         let mut player = PlayerState::new();
         let original_forward = player.forward;
 
-        // Create input with mouse movement
+        // Create input with mouse movement - mouse look should be applied
         let input = PlayerInput::new().with_mouse_delta(MouseDelta::new_with(100.0, 50.0));
 
         player.update(&input, 0.016); // ~60fps frame
@@ -619,6 +620,22 @@ mod tests {
         // Forward vector should still be normalized
         let forward_magnitude = player.forward.magnitude();
         assert!((forward_magnitude - 1.0).abs() < 0.0001);
+    }
+
+    #[test]
+    fn test_mouse_look_with_zero_delta() {
+        use super::super::input::MouseDelta;
+
+        let mut player = PlayerState::new();
+        let original_forward = player.forward;
+
+        // Create input with zero mouse movement - mouse look should not be applied
+        let input = PlayerInput::new().with_mouse_delta(MouseDelta::new());
+
+        player.update(&input, 0.016); // ~60fps frame
+
+        // Forward vector should NOT have changed (no mouse movement)
+        assert_eq!(player.forward, original_forward);
     }
 
     #[test]

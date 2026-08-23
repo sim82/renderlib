@@ -23,7 +23,7 @@ use renderlib::device_helpers::*;
 use renderlib::geometry::{primitives, PosColorNormalVertex};
 use renderlib::input::InputController;
 use renderlib::mesh::{load_gltf, quad_vertices_2d, Mesh, QuadVertex};
-use renderlib::player::{PlayerInput, PlayerState};
+use renderlib::player::PlayerState;
 
 /// Paths to the shader files.
 const GEOMETRY_SHADER_PATH: &str = "src/shaders/deferred_geometry.wgsl";
@@ -403,8 +403,8 @@ impl AppRenderer for DeferredRenderer {
             .as_secs_f32();
         self.last_frame_time = current_time;
 
-        // Create player input from input controller (takes mouse delta)
-        let player_input = PlayerInput::from_input_controller(&mut self.input_controller);
+        // Create player input from input controller with mouse filtering
+        let player_input = self.input_controller.get_player_input();
 
         // Update player position based on input
         self.player.update(&player_input, delta_time);

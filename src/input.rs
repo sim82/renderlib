@@ -7,6 +7,21 @@ use winit::dpi::PhysicalPosition;
 use winit::event::WindowEvent;
 use winit::keyboard::Key;
 
+/// Mouse input mode for camera control.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MouseMode {
+    /// Normal mode: mouse look is only enabled while Shift is held down.
+    Normal,
+    /// Grabbed mode: mouse look is constantly enabled.
+    Grabbed,
+}
+
+impl Default for MouseMode {
+    fn default() -> Self {
+        Self::Normal
+    }
+}
+
 /// Mouse movement delta for a frame.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct MouseDelta {
@@ -57,6 +72,10 @@ pub struct InputController {
     mouse_delta: MouseDelta,
     /// Previous cursor position for calculating delta.
     prev_cursor_pos: Option<(f64, f64)>,
+    /// Current mouse input mode.
+    mouse_mode: MouseMode,
+    /// Whether shift key is currently pressed (for normal mode mouse look).
+    shift_pressed: bool,
 }
 
 impl Default for InputController {
@@ -65,6 +84,8 @@ impl Default for InputController {
             pressed_keys: HashSet::new(),
             mouse_delta: MouseDelta::new(),
             prev_cursor_pos: None,
+            mouse_mode: MouseMode::Normal,
+            shift_pressed: false,
         }
     }
 }
@@ -76,6 +97,8 @@ impl InputController {
             pressed_keys: HashSet::new(),
             mouse_delta: MouseDelta::new(),
             prev_cursor_pos: None,
+            mouse_mode: MouseMode::Normal,
+            shift_pressed: false,
         }
     }
 
@@ -88,8 +111,17 @@ impl InputController {
             WindowEvent::KeyboardInput {
                 event: key_event, ..
             } => {
+                // Handle tilde key (`) for toggling mouse mode
                 if let Key::Character(c) = &key_event.logical_key {
                     let key_str = c.to_ascii_lowercase();
+
+                    if key_str == "`" && key_event.state.is_pressed() {
+                        // Toggle mouse mode
+                        self.mouse_mode = match self.mouse_mode {
+                            MouseMode::Normal => MouseMode::Grabbed,
+                            MouseMode::Grabbed => MouseMode::Normal,
+                        };
+                    }
 
                     if key_event.state.is_pressed() {
                         self.pressed_keys.insert(key_str);
@@ -97,6 +129,10 @@ impl InputController {
                         self.pressed_keys.remove(&key_str);
                     }
                 }
+            }
+            WindowEvent::ModifiersChanged(modifiers) => {
+                // Handle modifier changes for shift key tracking
+                self.shift_pressed = modifiers.state().shift_key();
             }
             WindowEvent::MouseInput { .. } => {
                 // We don't track mouse button state for now, just movement
@@ -146,6 +182,31 @@ impl InputController {
         &self.pressed_keys
     }
 
+    /// Returns the current mouse mode.
+    pub fn get_mouse_mode(&self) -> MouseMode {
+        self.mouse_mode
+    }
+
+    /// Sets the mouse mode.
+    pub fn set_mouse_mode(&mut self, mode: MouseMode) {
+        self.mouse_mode = mode;
+    }
+
+    /// Returns whether shift key is currently pressed.
+    pub fn is_shift_pressed(&self) -> bool {
+        self.shift_pressed
+    }
+
+    /// Returns whether mouse look should be active based on current mode.
+    /// In Normal mode: active only when Shift is pressed.
+    /// In Grabbed mode: always active.
+    pub fn is_mouse_look_active(&self) -> bool {
+        match self.mouse_mode {
+            MouseMode::Normal => self.shift_pressed,
+            MouseMode::Grabbed => true,
+        }
+    }
+
     /// Clears all pressed key states.
     ///
     /// This can be useful when resetting the controller or handling
@@ -173,6 +234,36 @@ impl InputController {
     /// Resets the mouse delta to zero.
     pub fn reset_mouse_delta(&mut self) {
         self.mouse_delta = MouseDelta::new();
+    }
+
+    /// Creates a PlayerInput with mouse delta filtered based on mouse mode.
+    ///
+    /// In Normal mode: mouse delta is zeroed out unless Shift is pressed.
+    /// In Grabbed mode: mouse delta is passed through as-is.
+    /// This allows the player logic to remain unaware of mouse grab state.
+    /// Creates a PlayerInput with mouse delta filtered based on mouse mode.
+    ///
+    /// In Normal mode: mouse delta is zeroed out unless Shift is pressed.
+    /// In Grabbed mode: mouse delta is passed through as-is.
+    /// This allows the player logic to remain unaware of mouse grab state.
+    pub fn get_player_input(&mut self) -> crate::player::PlayerInput {
+        let mouse_delta = self.take_mouse_delta();
+        let mouse_look_active = self.is_mouse_look_active();
+
+        // Filter mouse delta based on whether mouse look is active
+        let filtered_mouse_delta = if mouse_look_active {
+            mouse_delta
+        } else {
+            MouseDelta::new()
+        };
+
+        crate::player::PlayerInput {
+            move_forward: self.is_key_pressed("w"),
+            move_backward: self.is_key_pressed("s"),
+            move_left: self.is_key_pressed("a"),
+            move_right: self.is_key_pressed("d"),
+            mouse_delta: filtered_mouse_delta,
+        }
     }
 }
 
@@ -209,5 +300,99 @@ mod tests {
         let keys = input.pressed_keys();
         // Should be able to access the keys set
         assert_eq!(keys.len(), 0);
+    }
+
+    #[test]
+    fn test_mouse_mode_default() {
+        let input = InputController::new();
+        assert_eq!(input.get_mouse_mode(), MouseMode::Normal);
+    }
+
+    #[test]
+    fn test_mouse_mode_toggle() {
+        let mut input = InputController::new();
+        assert_eq!(input.get_mouse_mode(), MouseMode::Normal);
+
+        // Simulate tilde key press to toggle to Grabbed
+        input.set_mouse_mode(MouseMode::Grabbed);
+        assert_eq!(input.get_mouse_mode(), MouseMode::Grabbed);
+
+        // Toggle back to Normal
+        input.set_mouse_mode(MouseMode::Normal);
+        assert_eq!(input.get_mouse_mode(), MouseMode::Normal);
+    }
+
+    #[test]
+    fn test_shift_pressed_default() {
+        let input = InputController::new();
+        assert!(!input.is_shift_pressed());
+    }
+
+    #[test]
+    fn test_is_mouse_look_active() {
+        let mut input = InputController::new();
+
+        // In Normal mode without shift, mouse look should be inactive
+        assert!(!input.is_mouse_look_active());
+
+        // In Normal mode with shift, mouse look should be active
+        input.shift_pressed = true;
+        assert!(input.is_mouse_look_active());
+
+        // In Grabbed mode without shift, mouse look should still be active
+        input.shift_pressed = false;
+        input.set_mouse_mode(MouseMode::Grabbed);
+        assert!(input.is_mouse_look_active());
+
+        // In Grabbed mode with shift, mouse look should be active
+        input.shift_pressed = true;
+        assert!(input.is_mouse_look_active());
+    }
+
+    #[test]
+    fn test_get_player_input_filters_mouse_delta() {
+        let mut input = InputController::new();
+
+        // Simulate mouse movement
+        input.mouse_delta = MouseDelta::new_with(100.0, 50.0);
+
+        // In Normal mode without shift, mouse delta should be filtered out
+        let player_input = input.get_player_input();
+        assert_eq!(player_input.mouse_delta.x, 0.0);
+        assert_eq!(player_input.mouse_delta.y, 0.0);
+
+        // Simulate mouse movement again
+        input.mouse_delta = MouseDelta::new_with(100.0, 50.0);
+        input.shift_pressed = true; // Now shift is pressed
+
+        // In Normal mode with shift, mouse delta should pass through
+        let player_input = input.get_player_input();
+        assert_eq!(player_input.mouse_delta.x, 100.0);
+        assert_eq!(player_input.mouse_delta.y, 50.0);
+
+        // Simulate mouse movement again
+        input.mouse_delta = MouseDelta::new_with(100.0, 50.0);
+        input.shift_pressed = false; // Shift released
+        input.set_mouse_mode(MouseMode::Grabbed); // Switch to grabbed mode
+
+        // In Grabbed mode, mouse delta should pass through regardless of shift
+        let player_input = input.get_player_input();
+        assert_eq!(player_input.mouse_delta.x, 100.0);
+        assert_eq!(player_input.mouse_delta.y, 50.0);
+    }
+
+    #[test]
+    fn test_get_player_input_includes_key_states() {
+        let mut input = InputController::new();
+
+        // Simulate pressing W and D keys
+        input.pressed_keys.insert("w".to_string());
+        input.pressed_keys.insert("d".to_string());
+
+        let player_input = input.get_player_input();
+        assert!(player_input.move_forward);
+        assert!(!player_input.move_backward);
+        assert!(!player_input.move_left);
+        assert!(player_input.move_right);
     }
 }
