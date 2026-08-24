@@ -229,7 +229,7 @@ impl PlayerState {
         }
 
         // Calculate right vector from forward and up (needs to be recalculated after mouse look)
-        let right = self.up.cross(self.forward).normalize();
+        let right = self.forward.cross(self.up).normalize();
 
         // Build target movement direction from input
         let mut target_direction = Vector3::new(0.0, 0.0, 0.0);
