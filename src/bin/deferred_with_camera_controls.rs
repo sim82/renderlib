@@ -307,10 +307,7 @@ impl AppRenderer for DeferredRenderer {
         lights[3] = Light::new([0.0, 2.0, -3.0], [0.0, 1.0, 0.0]); // Green light behind
         let num_lights = 4u32;
 
-        // Calculate aspect ratio
-        let aspect = size.width as f32 / size.height as f32;
-
-        // Create lighting pass uniform buffer with aspect ratio for view-projection
+        // Create lighting pass uniform buffer
         let lighting_uniform_init =
             LightingUniform::new_with_lights(&camera, &lights[..num_lights as usize]);
         let lighting_uniform_buffer = create_buffer(
