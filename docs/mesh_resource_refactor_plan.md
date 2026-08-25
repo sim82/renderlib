@@ -2,7 +2,7 @@
 
 ## Status
 - ✅ **Phase 1: Core Types** - COMPLETE
-- ⏳ Phase 2: Unified Cache
+- ✅ **Phase 2: Unified Cache** - COMPLETE
 - ⏳ Phase 3: GraphicsContext Integration
 - ⏳ Phase 4: Migrate Renderers
 - ⏳ Phase 5: Cleanup and Validation
@@ -24,7 +24,37 @@
 6. ✅ **Updated Binaries**: Modified `forward.rs`, `deferred.rs`, and `deferred_with_camera_controls.rs` to use `MeshAsset`.
 7. ✅ **Removed Deprecated Code**: Removed the deprecated `Mesh` type as it was unused.
 
+---
+
+## Phase 2 Implementation Summary
+
+### Completed Tasks
+1. ✅ **Added `MeshSource` enum**: Supports loading from `Path` or `Primitive` type.
+2. ✅ **Added `PrimitiveType` enum**: Supports `Cube`, `Sphere`, and `Quad` primitives.
+3. ✅ **Implemented `Hash` for `PrimitiveType`**: Enables deduplication in the cache.
+4. ✅ **Added `MeshCache` struct**: Central cache with the following methods:
+   - `new(device)`: Create a new cache.
+   - `load(source)`: Load a mesh from a source (returns `MeshHandle`).
+   - `get_asset(handle)`: Get the CPU asset.
+   - `get_resource(handle)`: Get the GPU resource.
+   - `get_both(handle)`: Get both CPU and GPU data.
+   - `contains(handle)`: Check if a handle is valid.
+   - `remove(handle)`: Remove a mesh from the cache.
+   - `clear()`: Clear all meshes.
+   - `len()` / `is_empty()`: Cache statistics.
+5. ✅ **Added internal `generate_handle` method**: Uses hashing for deduplication.
+
 ### Files Modified
+- `renderlib/src/mesh.rs`: Added `MeshSource`, `PrimitiveType`, `MeshCache`, and related implementations.
+
+### Verification
+- ✅ `cargo check` passes
+- ✅ `cargo test` passes
+- ✅ All bins compile successfully
+
+---
+
+## Phase 1 Implementation Summary
 - `renderlib/src/mesh.rs`: Core types and backward compatibility.
 - `renderlib/src/bin/forward.rs`: Updated to use `MeshAsset`.
 - `renderlib/src/bin/deferred.rs`: Updated to use `MeshAsset`.

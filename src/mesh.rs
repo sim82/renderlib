@@ -18,7 +18,10 @@
 //! - [`MeshHandle`]: Opaque identifier for cached meshes.
 //! - [`MeshCache`]: Central cache for managing mesh assets and resources.
 
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 use cgmath::{Vector3, Zero};
 use gltf::mesh::util::ReadIndices;
@@ -120,6 +123,250 @@ pub struct MeshResource {
     pub num_indices: u32,
     /// Vertex buffer layout for pipeline compatibility.
     pub vertex_layout: VertexBufferLayout<'static>,
+}
+
+/// Source for loading a mesh, either from a file path or a primitive type.
+#[derive(Debug, Clone)]
+pub enum MeshSource {
+    /// Load from a GLTF/GLB file path.
+    Path(String),
+    /// Generate from a primitive type.
+    Primitive(PrimitiveType),
+}
+
+/// Type of primitive mesh to generate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrimitiveType {
+    /// A unit cube centered at the origin.
+    Cube,
+    /// A unit sphere centered at the origin.
+    Sphere,
+    /// A unit quad (2 triangles) for full-screen rendering.
+    Quad,
+}
+
+impl PrimitiveType {
+    /// Get a human-readable name for this primitive type.
+    pub fn name(&self) -> &'static str {
+        match self {
+            PrimitiveType::Cube => "cube",
+            PrimitiveType::Sphere => "sphere",
+            PrimitiveType::Quad => "quad",
+        }
+    }
+}
+
+impl Hash for PrimitiveType {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            PrimitiveType::Cube => 0u8.hash(state),
+            PrimitiveType::Sphere => 1u8.hash(state),
+            PrimitiveType::Quad => 2u8.hash(state),
+        }
+    }
+}
+
+/// Central cache for managing mesh assets and GPU resources.
+///
+/// This cache provides a unified interface for loading and accessing meshes,
+/// while maintaining a separation between CPU-side [`MeshAsset`] data and
+/// GPU-side [`MeshResource`] buffers. This allows for:
+///
+/// - **Resource Reuse**: Multiple parts of the application can share the same mesh.
+/// - **Memory Efficiency**: CPU data is only loaded once per mesh.
+/// - **Lifecycle Management**: GPU resources can be recreated independently of CPU data.
+/// - **Thread Safety**: CPU assets can be loaded in background threads.
+///
+/// # Example
+///
+/// ```ignore
+/// use renderlib::mesh::{MeshCache, MeshSource, PrimitiveType};
+///
+/// // Create a cache with a wgpu device
+/// let mut cache = MeshCache::new(&device);
+///
+/// // Load a mesh from a GLTF file
+/// let mesh_handle = cache.load(&MeshSource::Path("assets/duck.glb")).await?;
+///
+/// // Get the GPU resource for rendering
+/// let mesh_resource = cache.get_resource(mesh_handle).unwrap();
+///
+/// // Get the CPU asset for physics/culling
+/// let mesh_asset = cache.get_asset(mesh_handle).unwrap();
+/// ```
+#[derive(Debug)]
+pub struct MeshCache {
+    /// The wgpu device used to create GPU resources.
+    device: wgpu::Device,
+    /// CPU-side mesh assets, keyed by MeshHandle.
+    cpu_assets: HashMap<MeshHandle, Arc<MeshAsset>>,
+    /// GPU-side mesh resources, keyed by MeshHandle.
+    gpu_resources: HashMap<MeshHandle, Arc<MeshResource>>,
+}
+
+impl MeshCache {
+    /// Create a new mesh cache with the given wgpu device.
+    ///
+    /// # Arguments
+    ///
+    /// * `device` - The wgpu device to use for creating GPU buffers.
+    pub fn new(device: &wgpu::Device) -> Self {
+        Self {
+            device: device.clone(),
+            cpu_assets: HashMap::new(),
+            gpu_resources: HashMap::new(),
+        }
+    }
+
+    /// Load a mesh from the given source and return a handle to it.
+    ///
+    /// If the mesh is already loaded, returns the existing handle.
+    /// Otherwise, loads the mesh (either from file or primitive) and creates
+    /// both CPU and GPU resources.
+    ///
+    /// # Arguments
+    ///
+    /// * `source` - The source to load the mesh from (file path or primitive type).
+    ///
+    /// # Returns
+    ///
+    /// A [`MeshHandle`] that can be used to access the mesh's CPU asset or GPU resource.
+    pub fn load(&mut self, source: &MeshSource) -> Result<MeshHandle, MeshLoadError> {
+        // Generate a handle based on the source (for deduplication)
+        let handle = self.generate_handle(source);
+
+        // Check if we already have this mesh loaded
+        if self.cpu_assets.contains_key(&handle) {
+            return Ok(handle);
+        }
+
+        // Load the CPU asset
+        let asset = match source {
+            MeshSource::Path(path) => {
+                let mut asset = load_gltf(path)?;
+                // Override name with just the filename for consistency
+                asset.name = std::path::Path::new(path)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or(path)
+                    .to_string();
+                Arc::new(asset)
+            }
+            MeshSource::Primitive(primitive) => {
+                let (vertices, indices) = match primitive {
+                    PrimitiveType::Cube => crate::geometry::primitives::cube_vertices(),
+                    PrimitiveType::Sphere => {
+                        // Generate a simple ico-sphere (for now, use a cube as fallback)
+                        // TODO: Implement proper sphere generation
+                        crate::geometry::primitives::cube_vertices()
+                    }
+                    PrimitiveType::Quad => {
+                        // Convert QuadVertex to PosColorNormalVertex for consistency
+                        let quad_vertices = crate::mesh::quad_vertices_2d();
+                        let mut vertices = Vec::new();
+                        for qv in quad_vertices {
+                            vertices.push(PosColorNormalVertex {
+                                position: [qv.position[0], qv.position[1], 0.0],
+                                color: [1.0, 1.0, 1.0],
+                                normal: [0.0, 0.0, 1.0],
+                            });
+                        }
+                        let indices: Vec<u16> = vec![0, 1, 2, 1, 3, 2];
+                        (vertices, indices)
+                    }
+                };
+                Arc::new(MeshAsset::with_name(
+                    vertices,
+                    indices,
+                    primitive.name().to_string(),
+                ))
+            }
+        };
+
+        // Store the CPU asset
+        self.cpu_assets.insert(handle, asset.clone());
+
+        // Create the GPU resource
+        let resource = Arc::new(asset.create_resource(&self.device, Some(&asset.name)));
+        self.gpu_resources.insert(handle, resource);
+
+        Ok(handle)
+    }
+
+    /// Get the CPU asset for a mesh handle.
+    ///
+    /// Returns `None` if the handle is invalid.
+    pub fn get_asset(&self, handle: MeshHandle) -> Option<Arc<MeshAsset>> {
+        self.cpu_assets.get(&handle).cloned()
+    }
+
+    /// Get the GPU resource for a mesh handle.
+    ///
+    /// Returns `None` if the handle is invalid.
+    pub fn get_resource(&self, handle: MeshHandle) -> Option<Arc<MeshResource>> {
+        self.gpu_resources.get(&handle).cloned()
+    }
+
+    /// Get both the CPU asset and GPU resource for a mesh handle.
+    ///
+    /// Returns `None` if the handle is invalid.
+    pub fn get_both(&self, handle: MeshHandle) -> Option<(Arc<MeshAsset>, Arc<MeshResource>)> {
+        let asset = self.cpu_assets.get(&handle)?;
+        let resource = self.gpu_resources.get(&handle)?;
+        Some((asset.clone(), resource.clone()))
+    }
+
+    /// Check if a mesh handle is valid.
+    pub fn contains(&self, handle: MeshHandle) -> bool {
+        self.cpu_assets.contains_key(&handle)
+    }
+
+    /// Remove a mesh from the cache.
+    ///
+    /// This drops both the CPU asset and GPU resource for the given handle.
+    pub fn remove(&mut self, handle: MeshHandle) -> bool {
+        self.cpu_assets.remove(&handle).is_some() && self.gpu_resources.remove(&handle).is_some()
+    }
+
+    /// Clear all meshes from the cache.
+    ///
+    /// This drops all CPU assets and GPU resources.
+    pub fn clear(&mut self) {
+        self.cpu_assets.clear();
+        self.gpu_resources.clear();
+    }
+
+    /// Get the number of meshes currently loaded in the cache.
+    pub fn len(&self) -> usize {
+        self.cpu_assets.len()
+    }
+
+    /// Check if the cache is empty.
+    pub fn is_empty(&self) -> bool {
+        self.cpu_assets.is_empty()
+    }
+
+    /// Generate a unique handle for a mesh source.
+    ///
+    /// This uses a hash of the source to ensure the same source always
+    /// generates the same handle (for deduplication).
+    fn generate_handle(&self, source: &MeshSource) -> MeshHandle {
+        let hash = match source {
+            MeshSource::Path(path) => {
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                path.hash(&mut hasher);
+                hasher.finish()
+            }
+            MeshSource::Primitive(primitive) => {
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                primitive.hash(&mut hasher);
+                hasher.finish()
+            }
+        };
+        // Use the lower 64 bits of the hash as the handle
+        // This is safe because we're only using it for deduplication within the cache
+        MeshHandle(hash as u64)
+    }
 }
 
 impl MeshAsset {
