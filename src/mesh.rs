@@ -2,9 +2,27 @@
 //!
 //! Provides functionality for loading 3D meshes from various formats,
 //! particularly GLTF/GLB files, and managing their vertex and index buffers.
+//!
+//! # Architecture
+//!
+//! This module uses a decoupled design to separate CPU-side mesh data
+//! (`MeshAsset`) from GPU-side resources (`MeshResource`). This allows:
+//! - CPU-side operations (e.g., physics, culling) without GPU overhead.
+//! - Thread-safe loading (CPU data can be loaded in background threads).
+//! - Memory efficiency (avoid redundant CPU data for GPU-only use cases).
+//!
+//! # Key Types
+//!
+//! - [`MeshAsset`]: CPU-side mesh data (vertices, indices, metadata).
+//! - [`MeshResource`]: GPU-side buffers for rendering.
+//! - [`MeshHandle`]: Opaque identifier for cached meshes.
+//! - [`MeshCache`]: Central cache for managing mesh assets and resources.
+
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use cgmath::{Vector3, Zero};
 use gltf::mesh::util::ReadIndices;
+use wgpu::VertexBufferLayout;
 
 use crate::device_helpers::create_buffer_from_slice;
 use crate::geometry::PosColorNormalVertex;
@@ -46,9 +64,31 @@ impl BoundingBox {
     }
 }
 
-/// A 3D mesh with vertices and indices.
-#[derive(Debug)]
-pub struct Mesh {
+/// Opaque handle to a mesh in the cache.
+///
+/// This is a lightweight identifier that can be cloned and passed around
+/// to reference a mesh without holding onto the actual data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct MeshHandle(pub u64);
+
+impl MeshHandle {
+    /// Generate a new unique mesh handle.
+    pub fn new() -> Self {
+        static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+        Self(NEXT_ID.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
+/// CPU-side representation of a 3D mesh.
+///
+/// Contains the raw vertex and index data along with metadata like
+/// bounding box, scale, and center. This data is independent of any
+/// GPU resources and can be used for CPU-side operations like
+/// physics, culling, or mesh processing.
+///
+/// To create GPU resources for rendering, use [`MeshAsset::create_resource`].
+#[derive(Debug, Clone)]
+pub struct MeshAsset {
     /// The vertices of the mesh.
     pub vertices: Vec<PosColorNormalVertex>,
     /// The indices of the mesh (triangles).
@@ -59,11 +99,37 @@ pub struct Mesh {
     pub scale: f32,
     /// Center point of the mesh for translation to origin.
     pub center: Vector3<f32>,
+    /// Name of the mesh (for debugging and identification).
+    pub name: String,
 }
 
-impl Mesh {
-    /// Create a new mesh from vertices and indices with a default bounding box.
+/// GPU-side representation of a mesh.
+///
+/// Contains the vertex and index buffers needed for rendering.
+/// This is decoupled from the CPU-side [`MeshAsset`] to allow:
+/// - Independent lifecycle management (GPU resources can be recreated without reloading CPU data).
+/// - Memory efficiency (multiple instances can share the same GPU buffers).
+/// - Thread safety (GPU resources are only accessed from the render thread).
+#[derive(Debug)]
+pub struct MeshResource {
+    /// The vertex buffer for this mesh.
+    pub vertex_buffer: wgpu::Buffer,
+    /// The index buffer for this mesh.
+    pub index_buffer: wgpu::Buffer,
+    /// Number of indices in the mesh.
+    pub num_indices: u32,
+    /// Vertex buffer layout for pipeline compatibility.
+    pub vertex_layout: VertexBufferLayout<'static>,
+}
+
+impl MeshAsset {
+    /// Create a new mesh asset from vertices and indices with a default bounding box.
     pub fn new(vertices: Vec<PosColorNormalVertex>, indices: Vec<u16>) -> Self {
+        Self::with_name(vertices, indices, "unnamed".to_string())
+    }
+
+    /// Create a new mesh asset with a custom name.
+    pub fn with_name(vertices: Vec<PosColorNormalVertex>, indices: Vec<u16>, name: String) -> Self {
         // Calculate bounding box from vertices
         let (bounding_box, scale, center) = if !vertices.is_empty() {
             let mut min_x = f32::INFINITY;
@@ -103,10 +169,18 @@ impl Mesh {
             bounding_box,
             scale,
             center,
+            name,
         }
     }
 
-    /// Create GPU buffers for this mesh on the given device.
+    /// Get the vertex buffer layout for this mesh asset.
+    ///
+    /// This is used to configure the render pipeline's vertex input.
+    pub fn vertex_layout() -> VertexBufferLayout<'static> {
+        PosColorNormalVertex::desc()
+    }
+
+    /// Create GPU resources for this mesh asset on the given device.
     ///
     /// # Arguments
     ///
@@ -115,31 +189,34 @@ impl Mesh {
     ///
     /// # Returns
     ///
-    /// A tuple of (vertex_buffer, index_buffer, num_indices)
-    pub fn create_buffers(
+    /// A [`MeshResource`] containing the GPU buffers.
+    pub fn create_resource(
         &self,
         device: &wgpu::Device,
         label_prefix: Option<&str>,
-    ) -> (wgpu::Buffer, wgpu::Buffer, u32) {
+    ) -> MeshResource {
+        let label = label_prefix.unwrap_or(&self.name);
+
         let vertex_buffer = create_buffer_from_slice(
             device,
-            label_prefix
-                .map(|p| format!("{} Vertex Buffer", p))
-                .as_deref(),
+            Some(&format!("{} Vertex Buffer", label)),
             &self.vertices,
             wgpu::BufferUsages::VERTEX,
         );
 
         let index_buffer = create_buffer_from_slice(
             device,
-            label_prefix
-                .map(|p| format!("{} Index Buffer", p))
-                .as_deref(),
+            Some(&format!("{} Index Buffer", label)),
             &self.indices,
             wgpu::BufferUsages::INDEX,
         );
 
-        (vertex_buffer, index_buffer, self.indices.len() as u32)
+        MeshResource {
+            vertex_buffer,
+            index_buffer,
+            num_indices: self.indices.len() as u32,
+            vertex_layout: Self::vertex_layout(),
+        }
     }
 }
 
@@ -189,7 +266,7 @@ impl From<std::io::Error> for MeshLoadError {
 /// # Returns
 ///
 /// A `Mesh` containing the loaded vertices and indices.
-pub fn load_gltf(path: &str) -> Result<Mesh, MeshLoadError> {
+pub fn load_gltf(path: &str) -> Result<MeshAsset, MeshLoadError> {
     // Load the GLTF/GLB file
     let (document, buffers, _images) = if path.ends_with(".glb") {
         // For .glb files, read as bytes first
@@ -314,12 +391,20 @@ pub fn load_gltf(path: &str) -> Result<Mesh, MeshLoadError> {
         )
     };
 
-    Ok(Mesh {
+    // Extract the filename from the path for the mesh name
+    let name = std::path::Path::new(path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("unnamed")
+        .to_string();
+
+    Ok(MeshAsset {
         vertices: all_vertices,
         indices: all_indices,
         bounding_box,
         scale,
         center,
+        name,
     })
 }
 

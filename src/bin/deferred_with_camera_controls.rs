@@ -22,7 +22,7 @@ use renderlib::deferred::GBuffer;
 use renderlib::device_helpers::*;
 use renderlib::geometry::{primitives, PosColorNormalVertex};
 use renderlib::input::InputController;
-use renderlib::mesh::{load_gltf, quad_vertices_2d, Mesh, QuadVertex};
+use renderlib::mesh::{load_gltf, quad_vertices_2d, MeshAsset, QuadVertex};
 use renderlib::player::PlayerState;
 
 /// Paths to the shader files.
@@ -227,7 +227,7 @@ impl AppRenderer for DeferredRenderer {
             Ok(mesh) => mesh,
             Err(_) => {
                 let (vertices, indices) = primitives::cube_vertices();
-                Mesh::new(vertices, indices)
+                MeshAsset::new(vertices, indices)
             }
         };
         let vertices = mesh.vertices;

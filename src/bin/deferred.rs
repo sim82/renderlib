@@ -21,7 +21,7 @@ use renderlib::context::GraphicsContext;
 use renderlib::deferred::GBuffer;
 use renderlib::device_helpers::*;
 use renderlib::geometry::{primitives, PosColorNormalVertex};
-use renderlib::mesh::{load_gltf, quad_vertices_2d, Mesh, QuadVertex};
+use renderlib::mesh::{load_gltf, quad_vertices_2d, MeshAsset, QuadVertex};
 
 /// Paths to the shader files.
 const GEOMETRY_SHADER_PATH: &str = "src/shaders/deferred_geometry.wgsl";
@@ -77,7 +77,7 @@ pub struct DeferredRenderer {
 
     // Camera
     camera: Camera,
-    
+
     // Lighting
     lights: [Light; renderlib::camera::MAX_LIGHTS],
     num_lights: u32,
@@ -218,7 +218,7 @@ impl AppRenderer for DeferredRenderer {
             Ok(mesh) => mesh,
             Err(_) => {
                 let (vertices, indices) = primitives::cube_vertices();
-                Mesh::new(vertices, indices)
+                MeshAsset::new(vertices, indices)
             }
         };
         let vertices = mesh.vertices;
@@ -307,16 +307,17 @@ impl AppRenderer for DeferredRenderer {
         .expect("Failed to create geometry pipeline");
 
         // Create multiple lights for the scene
-        let mut lights: [Light; renderlib::camera::MAX_LIGHTS] = 
+        let mut lights: [Light; renderlib::camera::MAX_LIGHTS] =
             [Light::default(); renderlib::camera::MAX_LIGHTS];
-        lights[0] = Light::new([2.0, 3.0, 4.0], [1.0, 1.0, 1.0]);  // White light above and to the right
-        lights[1] = Light::new([-3.0, 2.0, 2.0], [1.0, 0.0, 0.0]);  // Red light to the left
+        lights[0] = Light::new([2.0, 3.0, 4.0], [1.0, 1.0, 1.0]); // White light above and to the right
+        lights[1] = Light::new([-3.0, 2.0, 2.0], [1.0, 0.0, 0.0]); // Red light to the left
         lights[2] = Light::new([0.0, -2.0, 3.0], [0.0, 0.0, 1.0]); // Blue light below
         lights[3] = Light::new([0.0, 2.0, -3.0], [0.0, 1.0, 0.0]); // Green light behind
         let num_lights = 4u32;
 
         // Create lighting pass uniform buffer
-        let lighting_uniform_init = LightingUniform::new_with_lights(&camera, &lights[..num_lights as usize]);
+        let lighting_uniform_init =
+            LightingUniform::new_with_lights(&camera, &lights[..num_lights as usize]);
         let lighting_uniform_buffer = create_buffer(
             device,
             Some("Lighting Uniform Buffer"),
@@ -441,8 +442,8 @@ impl AppRenderer for DeferredRenderer {
 
         // Update lighting uniform buffer with all lights
         let lighting_uniform = LightingUniform::new_with_lights(
-            &self.camera, 
-            &self.lights[..self.num_lights as usize]
+            &self.camera,
+            &self.lights[..self.num_lights as usize],
         );
         context.queue.write_buffer(
             &self.lighting_uniform_buffer,
