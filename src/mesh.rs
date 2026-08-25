@@ -18,6 +18,7 @@
 //! - [`MeshHandle`]: Opaque identifier for cached meshes.
 //! - [`MeshCache`]: Central cache for managing mesh assets and resources.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -199,9 +200,9 @@ pub struct MeshCache {
     /// The wgpu device used to create GPU resources.
     device: wgpu::Device,
     /// CPU-side mesh assets, keyed by MeshHandle.
-    cpu_assets: HashMap<MeshHandle, Arc<MeshAsset>>,
+    cpu_assets: RefCell<HashMap<MeshHandle, Arc<MeshAsset>>>,
     /// GPU-side mesh resources, keyed by MeshHandle.
-    gpu_resources: HashMap<MeshHandle, Arc<MeshResource>>,
+    gpu_resources: RefCell<HashMap<MeshHandle, Arc<MeshResource>>>,
 }
 
 impl MeshCache {
@@ -213,8 +214,8 @@ impl MeshCache {
     pub fn new(device: &wgpu::Device) -> Self {
         Self {
             device: device.clone(),
-            cpu_assets: HashMap::new(),
-            gpu_resources: HashMap::new(),
+            cpu_assets: RefCell::new(HashMap::new()),
+            gpu_resources: RefCell::new(HashMap::new()),
         }
     }
 
@@ -231,12 +232,12 @@ impl MeshCache {
     /// # Returns
     ///
     /// A [`MeshHandle`] that can be used to access the mesh's CPU asset or GPU resource.
-    pub fn load(&mut self, source: &MeshSource) -> Result<MeshHandle, MeshLoadError> {
+    pub fn load(&self, source: &MeshSource) -> Result<MeshHandle, MeshLoadError> {
         // Generate a handle based on the source (for deduplication)
         let handle = self.generate_handle(source);
 
         // Check if we already have this mesh loaded
-        if self.cpu_assets.contains_key(&handle) {
+        if self.cpu_assets.borrow().contains_key(&handle) {
             return Ok(handle);
         }
 
@@ -284,11 +285,11 @@ impl MeshCache {
         };
 
         // Store the CPU asset
-        self.cpu_assets.insert(handle, asset.clone());
+        self.cpu_assets.borrow_mut().insert(handle, asset.clone());
 
         // Create the GPU resource
         let resource = Arc::new(asset.create_resource(&self.device, Some(&asset.name)));
-        self.gpu_resources.insert(handle, resource);
+        self.gpu_resources.borrow_mut().insert(handle, resource);
 
         Ok(handle)
     }
@@ -297,53 +298,56 @@ impl MeshCache {
     ///
     /// Returns `None` if the handle is invalid.
     pub fn get_asset(&self, handle: MeshHandle) -> Option<Arc<MeshAsset>> {
-        self.cpu_assets.get(&handle).cloned()
+        self.cpu_assets.borrow().get(&handle).cloned()
     }
 
     /// Get the GPU resource for a mesh handle.
     ///
     /// Returns `None` if the handle is invalid.
     pub fn get_resource(&self, handle: MeshHandle) -> Option<Arc<MeshResource>> {
-        self.gpu_resources.get(&handle).cloned()
+        self.gpu_resources.borrow().get(&handle).cloned()
     }
 
     /// Get both the CPU asset and GPU resource for a mesh handle.
     ///
     /// Returns `None` if the handle is invalid.
     pub fn get_both(&self, handle: MeshHandle) -> Option<(Arc<MeshAsset>, Arc<MeshResource>)> {
-        let asset = self.cpu_assets.get(&handle)?;
-        let resource = self.gpu_resources.get(&handle)?;
+        let cpu_assets = self.cpu_assets.borrow();
+        let gpu_resources = self.gpu_resources.borrow();
+        let asset = cpu_assets.get(&handle)?;
+        let resource = gpu_resources.get(&handle)?;
         Some((asset.clone(), resource.clone()))
     }
 
     /// Check if a mesh handle is valid.
     pub fn contains(&self, handle: MeshHandle) -> bool {
-        self.cpu_assets.contains_key(&handle)
+        self.cpu_assets.borrow().contains_key(&handle)
     }
 
     /// Remove a mesh from the cache.
     ///
     /// This drops both the CPU asset and GPU resource for the given handle.
-    pub fn remove(&mut self, handle: MeshHandle) -> bool {
-        self.cpu_assets.remove(&handle).is_some() && self.gpu_resources.remove(&handle).is_some()
+    pub fn remove(&self, handle: MeshHandle) -> bool {
+        self.cpu_assets.borrow_mut().remove(&handle).is_some()
+            && self.gpu_resources.borrow_mut().remove(&handle).is_some()
     }
 
     /// Clear all meshes from the cache.
     ///
     /// This drops all CPU assets and GPU resources.
-    pub fn clear(&mut self) {
-        self.cpu_assets.clear();
-        self.gpu_resources.clear();
+    pub fn clear(&self) {
+        self.cpu_assets.borrow_mut().clear();
+        self.gpu_resources.borrow_mut().clear();
     }
 
     /// Get the number of meshes currently loaded in the cache.
     pub fn len(&self) -> usize {
-        self.cpu_assets.len()
+        self.cpu_assets.borrow().len()
     }
 
     /// Check if the cache is empty.
     pub fn is_empty(&self) -> bool {
-        self.cpu_assets.is_empty()
+        self.cpu_assets.borrow().is_empty()
     }
 
     /// Generate a unique handle for a mesh source.

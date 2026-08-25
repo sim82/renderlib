@@ -20,9 +20,9 @@ use renderlib::camera::{Camera, GeometryUniform, Light, LightingUniform};
 use renderlib::context::GraphicsContext;
 use renderlib::deferred::GBuffer;
 use renderlib::device_helpers::*;
-use renderlib::geometry::{primitives, PosColorNormalVertex};
+use renderlib::geometry::PosColorNormalVertex;
 use renderlib::input::InputController;
-use renderlib::mesh::{load_gltf, quad_vertices_2d, MeshAsset, QuadVertex};
+use renderlib::mesh::{quad_vertices_2d, MeshHandle, MeshSource, QuadVertex};
 use renderlib::player::PlayerState;
 
 /// Paths to the shader files.
@@ -36,9 +36,8 @@ const DEFAULT_MESH_PATH: &str = "assets/duck.glb";
 
 /// Renderer for deferred rendering demo.
 pub struct DeferredRenderer {
-    // GLTF mesh resources
-    mesh_vertex_buffer: wgpu::Buffer,
-    mesh_index_buffer: wgpu::Buffer,
+    // GLTF mesh handle
+    mesh_handle: MeshHandle,
     num_indices: u32,
 
     // Geometry pass resources
@@ -222,47 +221,30 @@ impl AppRenderer for DeferredRenderer {
         let lighting_shader_src =
             load_shader_source(LIGHTING_SHADER_PATH).expect("Failed to load lighting shader");
 
-        // Load mesh using framework, or fall back to cube if file doesn't exist
-        let mesh = match load_gltf(DEFAULT_MESH_PATH) {
-            Ok(mesh) => mesh,
-            Err(_) => {
-                let (vertices, indices) = primitives::cube_vertices();
-                MeshAsset::new(vertices, indices)
-            }
-        };
-        let vertices = mesh.vertices;
-        let indices = mesh.indices;
-        let model_scale = mesh.scale;
-        let mesh_center = mesh.center;
-        let num_indices = indices.len() as u32;
+        // Load mesh using the mesh cache
+        let mesh_source = MeshSource::Path(DEFAULT_MESH_PATH.to_string());
+        let mesh_handle = context.mesh_cache.load(&mesh_source).unwrap();
+
+        // Get the mesh resource for rendering
+        let mesh_resource = context.mesh_cache.get_resource(mesh_handle).unwrap();
+        let mesh_asset = context.mesh_cache.get_asset(mesh_handle).unwrap();
+
+        let model_scale = mesh_asset.scale;
+        let mesh_center = mesh_asset.center;
+        let num_indices = mesh_resource.num_indices;
 
         // Log which mesh was loaded
         if model_scale != 1.0 || mesh_center != Vector3::new(0.0, 0.0, 0.0) {
             eprintln!(
                 "Loaded GLTF mesh: {} vertices, {} indices, scale: {:.2}, center: ({:.2}, {:.2}, {:.2})",
-                vertices.len(),
-                indices.len(),
+                mesh_asset.vertices.len(),
+                mesh_asset.indices.len(),
                 model_scale,
                 mesh_center.x,
                 mesh_center.y,
                 mesh_center.z
             );
         }
-
-        // Create mesh buffers
-        let mesh_vertex_buffer = create_buffer_from_slice(
-            device,
-            Some("GLTF Vertex Buffer"),
-            &vertices,
-            wgpu::BufferUsages::VERTEX,
-        );
-
-        let mesh_index_buffer = create_buffer_from_slice(
-            device,
-            Some("GLTF Index Buffer"),
-            &indices,
-            wgpu::BufferUsages::INDEX,
-        );
 
         // Create quad buffer for lighting pass
         let quad_vertex_buffer = create_buffer_from_slice(
@@ -363,8 +345,7 @@ impl AppRenderer for DeferredRenderer {
         .expect("Failed to create lighting pipeline");
 
         DeferredRenderer {
-            mesh_vertex_buffer,
-            mesh_index_buffer,
+            mesh_handle,
             num_indices,
             geometry_uniform_buffer,
             geometry_bind_group_layout,
@@ -513,12 +494,17 @@ impl AppRenderer for DeferredRenderer {
                 multiview_mask: None,
             });
 
+            // Get the mesh resource from the cache
+            let mesh_resource = context.mesh_cache.get_resource(self.mesh_handle).unwrap();
+
             // Draw mesh
             geometry_pass.set_pipeline(&self.geometry_pipeline);
             geometry_pass.set_bind_group(0, &self.geometry_bind_group, &[]);
-            geometry_pass.set_vertex_buffer(0, self.mesh_vertex_buffer.slice(..));
-            geometry_pass
-                .set_index_buffer(self.mesh_index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+            geometry_pass.set_vertex_buffer(0, mesh_resource.vertex_buffer.slice(..));
+            geometry_pass.set_index_buffer(
+                mesh_resource.index_buffer.slice(..),
+                wgpu::IndexFormat::Uint16,
+            );
             geometry_pass.draw_indexed(0..self.num_indices, 0, 0..1);
         }
 

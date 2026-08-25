@@ -4,7 +4,7 @@
 - ✅ **Phase 1: Core Types** - COMPLETE
 - ✅ **Phase 2: Unified Cache** - COMPLETE
 - ✅ **Phase 3: GraphicsContext Integration** - COMPLETE
-- ⏳ Phase 4: Migrate Renderers
+- ✅ **Phase 4: Migrate Renderers** - COMPLETE
 - ⏳ Phase 5: Cleanup and Validation
 - ⏳ Phase 6: Documentation
 
@@ -71,7 +71,46 @@
 
 ---
 
-## Phase 2 Implementation Summary
+## Phase 4 Implementation Summary
+
+### Completed Tasks
+1. ✅ **Updated `ForwardRenderer`**:
+   - Replaced `vertex_buffer` and `index_buffer` fields with `mesh_handle`.
+   - Updated `init` to use `context.mesh_cache.load()`.
+   - Updated `render` to get mesh resource from cache.
+   - Removed unused `primitives` import.
+
+2. ✅ **Updated `DeferredRenderer`**:
+   - Replaced `mesh_vertex_buffer` and `mesh_index_buffer` fields with `mesh_handle`.
+   - Updated `init` to use `context.mesh_cache.load()`.
+   - Updated `render` to get mesh resource from cache.
+   - Removed unused `primitives` import.
+
+3. ✅ **Updated `DeferredWithCameraControlsRenderer`**:
+   - Replaced `mesh_vertex_buffer` and `mesh_index_buffer` fields with `mesh_handle`.
+   - Updated `init` to use `context.mesh_cache.load()`.
+   - Updated `render` to get mesh resource from cache.
+   - Removed unused `primitives` import.
+
+4. ✅ **Updated `MeshCache` for immutability**:
+   - Changed internal storage to use `RefCell<HashMap<...>>` for interior mutability.
+   - Updated all methods to take `&self` instead of `&mut self`.
+   - Fixed borrow checker issues in `get_both()` method.
+
+### Files Modified
+- `renderlib/src/mesh.rs`: Updated `MeshCache` to use `RefCell` for interior mutability.
+- `renderlib/src/bin/forward.rs`: Migrated to use `MeshCache`.
+- `renderlib/src/bin/deferred.rs`: Migrated to use `MeshCache`.
+- `renderlib/src/bin/deferred_with_camera_controls.rs`: Migrated to use `MeshCache`.
+
+### Verification
+- ✅ `cargo check` passes
+- ✅ `cargo test` passes
+- ✅ All bins compile successfully
+
+---
+
+## Phase 3 Implementation Summary
 - `renderlib/src/mesh.rs`: Core types and backward compatibility.
 - `renderlib/src/bin/forward.rs`: Updated to use `MeshAsset`.
 - `renderlib/src/bin/deferred.rs`: Updated to use `MeshAsset`.

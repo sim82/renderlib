@@ -19,8 +19,8 @@ use renderlib::app::{App, AppRenderer};
 use renderlib::camera::{Camera, GeometryUniform, Light, LightingUniform};
 use renderlib::context::GraphicsContext;
 use renderlib::device_helpers::*;
-use renderlib::geometry::{primitives, PosColorNormalVertex};
-use renderlib::mesh::{load_gltf, MeshAsset};
+use renderlib::geometry::PosColorNormalVertex;
+use renderlib::mesh::{MeshHandle, MeshSource};
 
 /// Path to the shader file.
 const SHADER_PATH: &str = "src/shaders/forward.wgsl";
@@ -33,8 +33,7 @@ const DEFAULT_MESH_PATH: &str = "assets/duck.glb";
 
 /// Renderer for the forward rendering demo with lighting.
 pub struct ForwardRenderer {
-    vertex_buffer: wgpu::Buffer,
-    index_buffer: wgpu::Buffer,
+    mesh_handle: MeshHandle,
     num_indices: u32,
     geometry_uniform_buffer: wgpu::Buffer,
     lighting_uniform_buffer: wgpu::Buffer,
@@ -117,48 +116,30 @@ impl AppRenderer for ForwardRenderer {
     async fn init(context: &GraphicsContext) -> Self {
         let device = &context.device;
 
-        // Load mesh using framework, or fall back to cube if file doesn't exist
-        let mesh = match load_gltf(DEFAULT_MESH_PATH) {
-            Ok(mesh) => mesh,
-            Err(_) => {
-                let (vertices, indices) = primitives::cube_vertices();
-                MeshAsset::new(vertices, indices)
-            }
-        };
-        let vertices = mesh.vertices;
-        let indices = mesh.indices;
-        let model_scale = mesh.scale;
-        let mesh_center = mesh.center;
-        let num_indices = indices.len() as u32;
+        // Load mesh using the mesh cache
+        let mesh_source = MeshSource::Path(DEFAULT_MESH_PATH.to_string());
+        let mesh_handle = context.mesh_cache.load(&mesh_source).unwrap();
+
+        // Get the mesh resource for rendering
+        let mesh_resource = context.mesh_cache.get_resource(mesh_handle).unwrap();
+        let mesh_asset = context.mesh_cache.get_asset(mesh_handle).unwrap();
+
+        let model_scale = mesh_asset.scale;
+        let mesh_center = mesh_asset.center;
+        let num_indices = mesh_resource.num_indices;
 
         // Log which mesh was loaded
         if model_scale != 1.0 || mesh_center != Vector3::new(0.0, 0.0, 0.0) {
             eprintln!(
                 "Loaded GLTF mesh: {} vertices, {} indices, scale: {:.2}, center: ({:.2}, {:.2}, {:.2})",
-                vertices.len(),
-                indices.len(),
+                mesh_asset.vertices.len(),
+                mesh_asset.indices.len(),
                 model_scale,
                 mesh_center.x,
                 mesh_center.y,
                 mesh_center.z
             );
         }
-
-        // Create vertex buffer
-        let vertex_buffer = create_buffer_from_slice(
-            device,
-            Some("GLTF Vertex Buffer"),
-            &vertices,
-            wgpu::BufferUsages::VERTEX,
-        );
-
-        // Create index buffer
-        let index_buffer = create_buffer_from_slice(
-            device,
-            Some("GLTF Index Buffer"),
-            &indices,
-            wgpu::BufferUsages::INDEX,
-        );
 
         // Create depth texture for depth testing using framework helper
         let (depth_texture, depth_texture_view) = create_depth_texture(
@@ -248,8 +229,7 @@ impl AppRenderer for ForwardRenderer {
                 .expect("Failed to create initial pipeline");
 
         ForwardRenderer {
-            vertex_buffer,
-            index_buffer,
+            mesh_handle,
             num_indices,
             geometry_uniform_buffer,
             lighting_uniform_buffer,
@@ -348,11 +328,17 @@ impl AppRenderer for ForwardRenderer {
             multiview_mask: None,
         });
 
+        // Get the mesh resource from the cache
+        let mesh_resource = context.mesh_cache.get_resource(self.mesh_handle).unwrap();
+
         // Draw the mesh
         renderpass.set_pipeline(&self.render_pipeline);
         renderpass.set_bind_group(0, &self.uniform_bind_group, &[]);
-        renderpass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-        renderpass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+        renderpass.set_vertex_buffer(0, mesh_resource.vertex_buffer.slice(..));
+        renderpass.set_index_buffer(
+            mesh_resource.index_buffer.slice(..),
+            wgpu::IndexFormat::Uint16,
+        );
         renderpass.draw_indexed(0..self.num_indices, 0, 0..1);
 
         // End the renderpass
