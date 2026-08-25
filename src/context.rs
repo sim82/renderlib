@@ -4,6 +4,8 @@ use std::sync::Arc;
 
 use winit::{event_loop::OwnedDisplayHandle, window::Window};
 
+use crate::mesh::MeshCache;
+
 /// Generic graphics context managing wgpu device, surface, and swap chain.
 ///
 /// This separates the wgpu initialization boilerplate from application-specific
@@ -16,6 +18,8 @@ pub struct GraphicsContext {
     pub surface: wgpu::Surface<'static>,
     pub surface_format: wgpu::TextureFormat,
     pub size: winit::dpi::PhysicalSize<u32>,
+    /// Central cache for managing mesh assets and GPU resources.
+    pub mesh_cache: MeshCache,
 }
 
 impl GraphicsContext {
@@ -42,11 +46,12 @@ impl GraphicsContext {
         let context = GraphicsContext {
             window: window.clone(),
             instance,
-            device,
+            device: device.clone(),
             queue,
             surface,
             surface_format,
             size,
+            mesh_cache: MeshCache::new(&device),
         };
 
         // Configure surface for the first time
