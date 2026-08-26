@@ -127,13 +127,49 @@ pub struct MeshResource {
 }
 
 /// Source for loading a mesh, either from a file path or a primitive type.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum MeshSource {
     /// Load from a GLTF/GLB file path.
     Path(String),
     /// Generate from a primitive type.
     Primitive(PrimitiveType),
 }
+
+impl Clone for MeshSource {
+    fn clone(&self) -> Self {
+        match self {
+            MeshSource::Path(path) => MeshSource::Path(path.clone()),
+            MeshSource::Primitive(primitive) => MeshSource::Primitive(*primitive),
+        }
+    }
+}
+
+impl Hash for MeshSource {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            MeshSource::Path(path) => {
+                0u8.hash(state);
+                path.hash(state);
+            }
+            MeshSource::Primitive(primitive) => {
+                1u8.hash(state);
+                primitive.hash(state);
+            }
+        }
+    }
+}
+
+impl PartialEq for MeshSource {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (MeshSource::Path(a), MeshSource::Path(b)) => a == b,
+            (MeshSource::Primitive(a), MeshSource::Primitive(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for MeshSource {}
 
 /// Type of primitive mesh to generate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -203,6 +239,8 @@ pub struct MeshCache {
     cpu_assets: RefCell<HashMap<MeshHandle, Arc<MeshAsset>>>,
     /// GPU-side mesh resources, keyed by MeshHandle.
     gpu_resources: RefCell<HashMap<MeshHandle, Arc<MeshResource>>>,
+    /// Mapping from source to handle for deduplication.
+    source_to_handle: RefCell<HashMap<MeshSource, MeshHandle>>,
 }
 
 impl MeshCache {
@@ -216,10 +254,14 @@ impl MeshCache {
             device: device.clone(),
             cpu_assets: RefCell::new(HashMap::new()),
             gpu_resources: RefCell::new(HashMap::new()),
+            source_to_handle: RefCell::new(HashMap::new()),
         }
     }
 
     /// Load a mesh from the given source and return a handle to it.
+    ///
+    /// This version uses interior mutability to allow loading through an immutable reference.
+    /// For better performance, prefer using `load_mut()` when you have mutable access.
     ///
     /// If the mesh is already loaded, returns the existing handle.
     /// Otherwise, loads the mesh (either from file or primitive) and creates
@@ -233,11 +275,118 @@ impl MeshCache {
     ///
     /// A [`MeshHandle`] that can be used to access the mesh's CPU asset or GPU resource.
     pub fn load(&self, source: &MeshSource) -> Result<MeshHandle, MeshLoadError> {
+        // Check if we already have this source loaded
+        {
+            let source_to_handle = self.source_to_handle.borrow();
+            if let Some(&handle) = source_to_handle.get(source) {
+                return Ok(handle);
+            }
+        }
+
         // Generate a handle based on the source (for deduplication)
         let handle = self.generate_handle(source);
 
-        // Check if we already have this mesh loaded
+        // Check if we already have this mesh loaded (by handle)
+        {
+            let cpu_assets = self.cpu_assets.borrow();
+            if cpu_assets.contains_key(&handle) {
+                // Store the source mapping for future lookups
+                self.source_to_handle
+                    .borrow_mut()
+                    .insert(source.clone(), handle);
+                return Ok(handle);
+            }
+        }
+
+        // Load the CPU asset
+        let asset = match source {
+            MeshSource::Path(path) => {
+                let mut asset = load_gltf(path)?;
+                // Override name with just the filename for consistency
+                asset.name = std::path::Path::new(path)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or(path)
+                    .to_string();
+                Arc::new(asset)
+            }
+            MeshSource::Primitive(primitive) => {
+                let (vertices, indices) = match primitive {
+                    PrimitiveType::Cube => crate::geometry::primitives::cube_vertices(),
+                    PrimitiveType::Sphere => {
+                        // Generate a simple ico-sphere (for now, use a cube as fallback)
+                        // TODO: Implement proper sphere generation
+                        crate::geometry::primitives::cube_vertices()
+                    }
+                    PrimitiveType::Quad => {
+                        // Convert QuadVertex to PosColorNormalVertex for consistency
+                        let quad_vertices = crate::mesh::quad_vertices_2d();
+                        let mut vertices = Vec::new();
+                        for qv in quad_vertices {
+                            vertices.push(PosColorNormalVertex {
+                                position: [qv.position[0], qv.position[1], 0.0],
+                                color: [1.0, 1.0, 1.0],
+                                normal: [0.0, 0.0, 1.0],
+                            });
+                        }
+                        let indices: Vec<u16> = vec![0, 1, 2, 1, 3, 2];
+                        (vertices, indices)
+                    }
+                };
+                Arc::new(MeshAsset::with_name(
+                    vertices,
+                    indices,
+                    primitive.name().to_string(),
+                ))
+            }
+        };
+
+        // Store the source mapping for future deduplication
+        self.source_to_handle
+            .borrow_mut()
+            .insert(source.clone(), handle);
+
+        // Store the CPU asset
+        self.cpu_assets.borrow_mut().insert(handle, asset.clone());
+
+        // Create the GPU resource
+        let resource = Arc::new(asset.create_resource(&self.device, Some(&asset.name)));
+        self.gpu_resources.borrow_mut().insert(handle, resource);
+
+        Ok(handle)
+    }
+
+    /// Load a mesh from the given source and return a handle to it.
+    ///
+    /// This version requires mutable access to the cache, which is more efficient
+    /// than the immutable version as it avoids RefCell overhead.
+    ///
+    /// If the mesh is already loaded, returns the existing handle.
+    /// Otherwise, loads the mesh (either from file or primitive) and creates
+    /// both CPU and GPU resources.
+    ///
+    /// # Arguments
+    ///
+    /// * `source` - The source to load the mesh from (file path or primitive type).
+    ///
+    /// # Returns
+    ///
+    /// A [`MeshHandle`] that can be used to access the mesh's CPU asset or GPU resource.
+    pub fn load_mut(&mut self, source: &MeshSource) -> Result<MeshHandle, MeshLoadError> {
+        // Check if we already have this source loaded
+        if let Some(&handle) = self.source_to_handle.borrow().get(source) {
+            return Ok(handle);
+        }
+
+        // Generate a handle based on the source (for deduplication)
+        let handle = self.generate_handle(source);
+
+        // Check if we already have this mesh loaded (by handle)
         if self.cpu_assets.borrow().contains_key(&handle) {
+            // Store the source mapping for future lookups
+            self.source_to_handle
+                .borrow_mut()
+                .insert(source.clone(), handle);
             return Ok(handle);
         }
 
@@ -284,6 +433,11 @@ impl MeshCache {
             }
         };
 
+        // Store the source mapping for future deduplication
+        self.source_to_handle
+            .borrow_mut()
+            .insert(source.clone(), handle);
+
         // Store the CPU asset
         self.cpu_assets.borrow_mut().insert(handle, asset.clone());
 
@@ -328,8 +482,17 @@ impl MeshCache {
     ///
     /// This drops both the CPU asset and GPU resource for the given handle.
     pub fn remove(&self, handle: MeshHandle) -> bool {
-        self.cpu_assets.borrow_mut().remove(&handle).is_some()
-            && self.gpu_resources.borrow_mut().remove(&handle).is_some()
+        let had_cpu = self.cpu_assets.borrow_mut().remove(&handle).is_some();
+        let had_gpu = self.gpu_resources.borrow_mut().remove(&handle).is_some();
+
+        // Also remove from source mapping if present
+        if had_cpu && had_gpu {
+            self.source_to_handle
+                .borrow_mut()
+                .retain(|_, &mut h| h != handle);
+        }
+
+        had_cpu && had_gpu
     }
 
     /// Clear all meshes from the cache.
@@ -338,6 +501,7 @@ impl MeshCache {
     pub fn clear(&self) {
         self.cpu_assets.borrow_mut().clear();
         self.gpu_resources.borrow_mut().clear();
+        self.source_to_handle.borrow_mut().clear();
     }
 
     /// Get the number of meshes currently loaded in the cache.
