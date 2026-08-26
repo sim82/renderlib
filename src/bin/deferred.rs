@@ -18,13 +18,13 @@ use winit::event::WindowEvent;
 use winit::event_loop::EventLoop;
 use winit::keyboard::Key;
 
+use renderlib::app::{AppRenderer, Application};
 use renderlib::camera::{Camera, GeometryUniform, Light, LightingUniform};
 use renderlib::context::RenderContext;
 use renderlib::deferred::GBuffer;
 use renderlib::device_helpers::*;
 use renderlib::geometry::PosColorNormalVertex;
 use renderlib::mesh::{quad_vertices_2d, MeshHandle, MeshSource, QuadVertex};
-use renderlib::new_app::{NewAppRenderer, NewApplication};
 
 /// Paths to the shader files.
 const GEOMETRY_SHADER_PATH: &str = "src/shaders/deferred_geometry.wgsl";
@@ -201,7 +201,7 @@ impl DeferredRenderer {
     }
 }
 
-impl NewAppRenderer for DeferredRenderer {
+impl AppRenderer for DeferredRenderer {
     async fn init(mut context: RenderContext<'_>) -> Self {
         let size = context.size();
         let aspect = size.width as f32 / size.height as f32;
@@ -619,7 +619,7 @@ fn main() {
     // Use Poll control flow for smooth animation
     event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
 
-    // Use the new Application struct with improved architecture
-    let mut app = NewApplication::<DeferredRenderer>::new();
+    // Use the Application struct with improved architecture
+    let mut app = Application::<DeferredRenderer>::new();
     event_loop.run_app(&mut app).unwrap();
 }

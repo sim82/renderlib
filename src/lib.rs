@@ -13,6 +13,5 @@ pub mod device_helpers;
 pub mod geometry;
 pub mod input;
 pub mod mesh;
-pub mod new_app;
 pub mod player;
 pub mod state;

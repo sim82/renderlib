@@ -11,10 +11,10 @@ use winit::event::WindowEvent;
 use winit::event_loop::EventLoop;
 use winit::keyboard::Key;
 
+use renderlib::app::{AppRenderer, Application};
 use renderlib::context::RenderContext;
 use renderlib::device_helpers::*;
 use renderlib::geometry::{primitives, PosColorVertex};
-use renderlib::new_app::{NewAppRenderer, NewApplication};
 
 /// Path to the shader file.
 const SHADER_PATH: &str = "src/shaders/triangle.wgsl";
@@ -77,7 +77,7 @@ impl TriangleRenderer {
     }
 }
 
-impl NewAppRenderer for TriangleRenderer {
+impl AppRenderer for TriangleRenderer {
     async fn init(mut context: RenderContext<'_>) -> Self {
         let device = context.wgpu_device();
         let surface_format = context.surface_format();
@@ -226,7 +226,7 @@ fn main() {
     // Use Poll control flow for games that want to render as fast as possible
     event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
 
-    // Use the new Application struct with improved architecture
-    let mut app = NewApplication::<TriangleRenderer>::new();
+    // Use the Application struct with improved architecture
+    let mut app = Application::<TriangleRenderer>::new();
     event_loop.run_app(&mut app).unwrap();
 }

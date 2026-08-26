@@ -19,10 +19,6 @@ name = "triangle"
 path = "src/bin/triangle.rs"
 
 [[bin]]
-name = "triangle_new"
-path = "src/bin/triangle_new.rs"
-
-[[bin]]
 name = "forward"
 path = "src/bin/forward.rs"
 

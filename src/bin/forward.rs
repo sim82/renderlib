@@ -18,12 +18,12 @@ use winit::event::WindowEvent;
 use winit::event_loop::EventLoop;
 use winit::keyboard::Key;
 
+use renderlib::app::{AppRenderer, Application};
 use renderlib::camera::{GeometryUniform, Light, LightingUniform};
 use renderlib::context::RenderContext;
 use renderlib::device_helpers::*;
 use renderlib::geometry::PosColorNormalVertex;
 use renderlib::mesh::{MeshHandle, MeshSource};
-use renderlib::new_app::{NewAppRenderer, NewApplication};
 
 /// Path to the shader file.
 const SHADER_PATH: &str = "src/shaders/forward.wgsl";
@@ -114,7 +114,7 @@ impl ForwardRenderer {
     }
 }
 
-impl NewAppRenderer for ForwardRenderer {
+impl AppRenderer for ForwardRenderer {
     async fn init(mut context: RenderContext<'_>) -> Self {
         let size = context.size();
         let surface_format = context.surface_format();
@@ -401,7 +401,7 @@ fn main() {
     // Use Poll control flow for smooth animation
     event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
 
-    // Use the new Application struct with improved architecture
-    let mut app = NewApplication::<ForwardRenderer>::new();
+    // Use the Application struct with improved architecture
+    let mut app = Application::<ForwardRenderer>::new();
     event_loop.run_app(&mut app).unwrap();
 }

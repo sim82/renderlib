@@ -161,7 +161,7 @@ impl AppState {
         &mut self,
         source: &crate::mesh::MeshSource,
     ) -> Result<MeshHandle, crate::mesh::MeshLoadError> {
-        let handle = self.mesh_cache.load(source)?;
+        let handle = self.mesh_cache.load_mut(source)?;
         self.set_active_mesh(handle);
         Ok(handle)
     }
