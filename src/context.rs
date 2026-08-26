@@ -4,7 +4,9 @@ use std::sync::Arc;
 
 use winit::{event_loop::OwnedDisplayHandle, window::Window};
 
+use crate::device::GraphicsDevice;
 use crate::mesh::MeshCache;
+use crate::state::AppState;
 
 /// Generic graphics context managing wgpu device, surface, and swap chain.
 ///
@@ -129,5 +131,120 @@ impl GraphicsContext {
     /// Notify the window before presenting.
     pub fn pre_present_notify(&self) {
         self.window.pre_present_notify();
+    }
+}
+
+/// A context passed to renderers that provides access to both
+/// immutable GPU infrastructure and mutable application state.
+///
+/// This struct holds references to both `GraphicsDevice` (immutable infrastructure)
+/// and `AppState` (mutable state), allowing renderers to access all necessary
+/// resources for rendering while maintaining a clean separation of concerns.
+///
+/// # Example
+///
+/// ```ignore
+/// use renderlib::context::RenderContext;
+///
+/// fn render(&mut self, context: RenderContext) {
+///     // Access GPU infrastructure
+///     let device = context.device();
+///     let queue = context.queue();
+///
+///     // Access mutable state
+///     let mesh_cache = context.state().mesh_cache;
+///     let camera = &context.state().camera;
+/// }
+/// ```
+pub struct RenderContext<'a> {
+    /// Immutable GPU infrastructure
+    device: &'a GraphicsDevice,
+    /// Mutable application state
+    state: &'a mut AppState,
+    /// Current surface texture (optional, for rendering)
+    surface_texture: Option<wgpu::SurfaceTexture>,
+}
+
+impl<'a> RenderContext<'a> {
+    /// Create a new render context.
+    ///
+    /// # Arguments
+    ///
+    /// * `device` - Reference to the GPU infrastructure
+    /// * `state` - Mutable reference to the application state
+    /// * `surface_texture` - Optional surface texture for the current frame
+    pub fn new(
+        device: &'a GraphicsDevice,
+        state: &'a mut AppState,
+        surface_texture: Option<wgpu::SurfaceTexture>,
+    ) -> Self {
+        Self {
+            device,
+            state,
+            surface_texture,
+        }
+    }
+
+    /// Get a reference to the GPU device.
+    pub fn device(&self) -> &GraphicsDevice {
+        self.device
+    }
+
+    /// Get a reference to the wgpu device.
+    pub fn wgpu_device(&self) -> &wgpu::Device {
+        &self.device.device
+    }
+
+    /// Get a reference to the wgpu queue.
+    pub fn wgpu_queue(&self) -> &wgpu::Queue {
+        &self.device.queue
+    }
+
+    /// Get a mutable reference to the application state.
+    pub fn state(&mut self) -> &mut AppState {
+        self.state
+    }
+
+    /// Take the current surface texture, leaving None in its place.
+    /// This is used when the texture needs to be presented after rendering.
+    pub fn take_surface_texture(&mut self) -> Option<wgpu::SurfaceTexture> {
+        self.surface_texture.take()
+    }
+
+    /// Get the current surface texture.
+    pub fn surface_texture(&self) -> Option<&wgpu::SurfaceTexture> {
+        self.surface_texture.as_ref()
+    }
+
+    /// Get a texture view from the current surface texture.
+    ///
+    /// Returns None if no surface texture is available.
+    pub fn get_texture_view(&self) -> Option<wgpu::TextureView> {
+        self.surface_texture.as_ref().map(|texture| {
+            texture.texture.create_view(&wgpu::TextureViewDescriptor {
+                format: Some(self.device.surface_config.format.add_srgb_suffix()),
+                ..Default::default()
+            })
+        })
+    }
+
+    /// Request a redraw of the window.
+    pub fn request_redraw(&self) {
+        self.device.request_redraw();
+    }
+
+    /// Notify the window before presenting.
+    pub fn pre_present_notify(&self) {
+        self.device.pre_present_notify();
+    }
+
+    /// Get the current window size.
+    pub fn size(&self) -> winit::dpi::PhysicalSize<u32> {
+        self.device.size()
+    }
+
+    /// Get the surface format.
+    pub fn surface_format(&self) -> wgpu::TextureFormat {
+        self.device.surface_format()
     }
 }

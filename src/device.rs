@@ -69,9 +69,21 @@ impl SurfaceConfig {
     /// Update the surface size and reconfigure.
     ///
     /// This should be called when the window is resized.
-    pub fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>, device: &wgpu::Device) {
-        self.size = new_size;
-        self.configure(device);
+    pub fn resize(&self, new_size: winit::dpi::PhysicalSize<u32>, device: &wgpu::Device) {
+        // Create a new surface config with updated size
+        let mut surface = self.surface.lock().unwrap();
+        let config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format: self.format,
+            color_space: wgpu::SurfaceColorSpace::Auto,
+            view_formats: vec![self.format.add_srgb_suffix()],
+            alpha_mode: wgpu::CompositeAlphaMode::Auto,
+            width: new_size.width,
+            height: new_size.height,
+            desired_maximum_frame_latency: 2,
+            present_mode: wgpu::PresentMode::AutoVsync,
+        };
+        surface.configure(device, &config);
     }
 
     /// Try to acquire the current surface texture for rendering.
@@ -226,6 +238,11 @@ impl GraphicsDevice {
     /// Get the current window size.
     pub fn size(&self) -> winit::dpi::PhysicalSize<u32> {
         self.surface_config.size
+    }
+
+    /// Resize the surface to the new size.
+    pub fn resize(&self, new_size: winit::dpi::PhysicalSize<u32>) {
+        self.surface_config.resize(new_size, &self.device);
     }
 
     /// Request a redraw of the window.
