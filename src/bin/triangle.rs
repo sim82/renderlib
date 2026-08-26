@@ -1,6 +1,7 @@
-//! Self-contained triangle demo binary.
+//! Self-contained triangle demo binary using the new architecture.
 //!
-//! This example demonstrates a rotating triangle using the renderlib framework.
+//! This example demonstrates a rotating triangle using the new renderlib framework
+//! with clean separation between GPU infrastructure and application state.
 //! Press R to reload shaders.
 
 use std::time::Instant;
@@ -10,10 +11,10 @@ use winit::event::WindowEvent;
 use winit::event_loop::EventLoop;
 use winit::keyboard::Key;
 
-use renderlib::app::{App, AppRenderer};
-use renderlib::context::GraphicsContext;
+use renderlib::context::RenderContext;
 use renderlib::device_helpers::*;
 use renderlib::geometry::{primitives, PosColorVertex};
+use renderlib::new_app::{NewAppRenderer, NewApplication};
 
 /// Path to the shader file.
 const SHADER_PATH: &str = "src/shaders/triangle.wgsl";
@@ -25,7 +26,7 @@ pub struct Uniforms {
     pub rotation: [[f32; 4]; 4],
 }
 
-/// Renderer for the rotating triangle demo.
+/// Renderer for the rotating triangle demo using new architecture.
 pub struct TriangleRenderer {
     vertex_buffer: wgpu::Buffer,
     uniform_buffer: wgpu::Buffer,
@@ -44,32 +45,31 @@ impl TriangleRenderer {
         bind_group_layout: &wgpu::BindGroupLayout,
         surface_format: wgpu::TextureFormat,
     ) -> Result<wgpu::RenderPipeline, String> {
+        use renderlib::device_helpers::{
+            create_pipeline_layout, create_shader_module, RenderPipelineBuilder,
+        };
+
         let shader_src = load_shader_source(SHADER_PATH)?;
-
         let shader_module = create_shader_module(device, Some("Triangle Shader"), &shader_src);
-
-        let render_pipeline_layout = create_pipeline_layout(
+        let pipeline_layout = create_pipeline_layout(
             device,
-            Some("Render Pipeline Layout"),
+            Some("Triangle Pipeline Layout"),
             &[Some(bind_group_layout)],
         );
 
-        let pipeline = RenderPipelineBuilder::new(device)
-            .with_label(Some("Render Pipeline"))
-            .with_layout(Some(&render_pipeline_layout))
+        Ok(RenderPipelineBuilder::new(device)
+            .with_label(Some("Triangle Pipeline"))
+            .with_layout(Some(&pipeline_layout))
             .with_shader_module(&shader_module)
             .with_vertex_entry("vs_main")
             .with_fragment_entry("fs_main")
             .with_vertex_buffers(&[Some(PosColorVertex::desc())])
-            .with_color_formats(&[surface_format.add_srgb_suffix()])
-            .with_primitive(wgpu::PrimitiveState::default())
-            .build();
-
-        Ok(pipeline)
+            .with_color_formats(&[surface_format])
+            .build())
     }
 
-    /// Reloads the shader from disk and recreates the pipeline.
-    pub fn reload_shader(&mut self, device: &wgpu::Device) -> Result<(), String> {
+    /// Reloads the shader.
+    fn reload_shader(&mut self, device: &wgpu::Device) -> Result<(), String> {
         self.render_pipeline =
             Self::create_pipeline(device, &self.bind_group_layout, self.surface_format)?;
         self.should_reload = false;
@@ -77,9 +77,10 @@ impl TriangleRenderer {
     }
 }
 
-impl AppRenderer for TriangleRenderer {
-    async fn init(context: &GraphicsContext) -> Self {
-        let device = &context.device;
+impl NewAppRenderer for TriangleRenderer {
+    async fn init(mut context: RenderContext<'_>) -> Self {
+        let device = context.wgpu_device();
+        let surface_format = context.surface_format();
 
         // Create vertex buffer from framework primitive
         let vertex_buffer = create_buffer_from_slice(
@@ -115,9 +116,8 @@ impl AppRenderer for TriangleRenderer {
         );
 
         // Create initial pipeline
-        let render_pipeline =
-            Self::create_pipeline(device, &bind_group_layout, context.surface_format)
-                .expect("Failed to create initial pipeline");
+        let render_pipeline = Self::create_pipeline(device, &bind_group_layout, surface_format)
+            .expect("Failed to create initial pipeline");
 
         TriangleRenderer {
             vertex_buffer,
@@ -125,20 +125,17 @@ impl AppRenderer for TriangleRenderer {
             uniform_bind_group,
             render_pipeline,
             bind_group_layout,
-            surface_format: context.surface_format,
+            surface_format,
             should_reload: false,
             start_time: Instant::now(),
         }
     }
 
-    fn render(&mut self, context: &mut GraphicsContext) {
+    fn render(&mut self, mut context: RenderContext<'_>) {
         // Reload shader if requested
         if self.should_reload {
-            eprintln!("Reloading triangle shader...");
-            if let Err(e) = self.reload_shader(&context.device) {
+            if let Err(e) = self.reload_shader(context.wgpu_device()) {
                 eprintln!("Shader reload failed: {}", e);
-            } else {
-                eprintln!("Triangle shader reloaded successfully!");
             }
         }
 
@@ -147,7 +144,7 @@ impl AppRenderer for TriangleRenderer {
         let rotation_matrix = cgmath::Matrix4::from_angle_z(cgmath::Rad(elapsed));
 
         // Update uniform buffer with new rotation matrix
-        context.queue.write_buffer(
+        context.wgpu_queue().write_buffer(
             &self.uniform_buffer,
             0,
             bytemuck::cast_slice(&[Uniforms {
@@ -155,15 +152,16 @@ impl AppRenderer for TriangleRenderer {
             }]),
         );
 
-        // Get current surface texture and view from context
-        let surface_texture = match context.get_current_texture() {
-            Some(texture) => texture,
+        // Get texture view from context
+        let texture_view = match context.get_texture_view() {
+            Some(view) => view,
             None => return,
         };
-        let texture_view = context.create_texture_view(&surface_texture);
 
         // Clear the screen and draw the triangle
-        let mut encoder = context.device.create_command_encoder(&Default::default());
+        let mut encoder = context
+            .wgpu_device()
+            .create_command_encoder(&Default::default());
 
         let mut renderpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: None,
@@ -191,17 +189,20 @@ impl AppRenderer for TriangleRenderer {
         // End the renderpass
         drop(renderpass);
 
-        // Submit and present
-        context.queue.submit([encoder.finish()]);
-        context.pre_present_notify();
-        context.queue.present(surface_texture);
+        // Submit for rendering
+        context.wgpu_queue().submit([encoder.finish()]);
     }
 
-    fn resize(&mut self, _context: &mut GraphicsContext, _new_size: winit::dpi::PhysicalSize<u32>) {
-        // Demo doesn't need special resize handling beyond what GraphicsContext does
+    fn resize(&mut self, context: RenderContext<'_>, new_size: winit::dpi::PhysicalSize<u32>) {
+        // Update surface format if needed
+        self.surface_format = context.surface_format();
+        // Recreate pipeline with new format
+        if let Err(e) = self.reload_shader(context.wgpu_device()) {
+            eprintln!("Pipeline recreation failed on resize: {}", e);
+        }
     }
 
-    fn input(&mut self, event: &WindowEvent) {
+    fn input(&mut self, _context: RenderContext<'_>, event: &WindowEvent) {
         if let WindowEvent::KeyboardInput {
             event: key_event, ..
         } = event
@@ -225,6 +226,7 @@ fn main() {
     // Use Poll control flow for games that want to render as fast as possible
     event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
 
-    let mut app = App::<TriangleRenderer>::new();
+    // Use the new Application struct with improved architecture
+    let mut app = NewApplication::<TriangleRenderer>::new();
     event_loop.run_app(&mut app).unwrap();
 }

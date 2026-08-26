@@ -1,4 +1,4 @@
-//! Deferred rendering demo with mesh loading.
+//! Deferred rendering demo with mesh loading and camera controls using the new architecture.
 //!
 //! Combines mesh loading with deferred shading pipeline:
 //! - Loads a GLTF mesh from disk (defaults to assets/duck.glb)
@@ -6,7 +6,12 @@
 //! - Geometry pass: renders mesh to G-buffer (position, normal, albedo)
 //! - Lighting pass: full-screen quad that reads G-buffer and computes lighting
 //! - Auto-scales and centers the mesh
+//! - First-person camera controls with WASD + mouse look
 //! - Press R to reload shaders
+//!
+//! Uses the new renderlib framework with clean separation between
+//! GPU infrastructure and application state, while maintaining the same
+//! input handling with PlayerState and InputController as the original.
 
 use std::time::Instant;
 
@@ -15,14 +20,14 @@ use winit::event::WindowEvent;
 use winit::event_loop::EventLoop;
 use winit::keyboard::Key;
 
-use renderlib::app::{App, AppRenderer};
 use renderlib::camera::{Camera, GeometryUniform, Light, LightingUniform};
-use renderlib::context::GraphicsContext;
+use renderlib::context::RenderContext;
 use renderlib::deferred::GBuffer;
 use renderlib::device_helpers::*;
 use renderlib::geometry::PosColorNormalVertex;
 use renderlib::input::InputController;
 use renderlib::mesh::{quad_vertices_2d, MeshHandle, MeshSource, QuadVertex};
+use renderlib::new_app::{NewAppRenderer, NewApplication};
 use renderlib::player::PlayerState;
 
 /// Paths to the shader files.
@@ -34,7 +39,7 @@ const LIGHTING_SHADER_PATH: &str = "src/shaders/deferred_lighting.wgsl";
 /// If the file doesn't exist, a built-in cube will be used.
 const DEFAULT_MESH_PATH: &str = "assets/duck.glb";
 
-/// Renderer for deferred rendering demo.
+/// Renderer for deferred rendering demo with camera controls using new architecture.
 pub struct DeferredRenderer {
     // GLTF mesh handle
     mesh_handle: MeshHandle,
@@ -108,7 +113,6 @@ impl DeferredRenderer {
             &[Some(bind_group_layout)],
         );
 
-        // Use the enhanced builder with multi-color attachments for G-buffer
         // Enable depth testing for geometry pass
         let depth_stencil = wgpu::DepthStencilState {
             format: wgpu::TextureFormat::Depth32Float,
@@ -208,12 +212,13 @@ impl DeferredRenderer {
     }
 }
 
-impl AppRenderer for DeferredRenderer {
-    async fn init(context: &GraphicsContext) -> Self {
-        let device = &context.device;
-        let size = context.size;
+impl NewAppRenderer for DeferredRenderer {
+    async fn init(mut context: RenderContext<'_>) -> Self {
+        let size = context.size();
         let aspect = size.width as f32 / size.height as f32;
-        let camera = Camera::new();
+
+        // Use camera from app state as starting point
+        let camera = context.state().camera.clone();
 
         // Load shaders
         let geometry_shader_src =
@@ -221,13 +226,23 @@ impl AppRenderer for DeferredRenderer {
         let lighting_shader_src =
             load_shader_source(LIGHTING_SHADER_PATH).expect("Failed to load lighting shader");
 
-        // Load mesh using the mesh cache
+        // Load mesh using the new mesh cache via context state
         let mesh_source = MeshSource::Path(DEFAULT_MESH_PATH.to_string());
-        let mesh_handle = context.mesh_cache.load(&mesh_source).unwrap();
+        let mesh_handle = context
+            .state()
+            .mesh_cache
+            .load_mut(&mesh_source)
+            .expect("Failed to load mesh");
 
-        // Get the mesh resource for rendering
-        let mesh_resource = context.mesh_cache.get_resource(mesh_handle).unwrap();
-        let mesh_asset = context.mesh_cache.get_asset(mesh_handle).unwrap();
+        // Store mesh handle in app state
+        context.state().set_active_mesh(mesh_handle);
+
+        // Get both mesh asset and resource using immutable access
+        let (mesh_asset, mesh_resource) = context
+            .state()
+            .mesh_cache
+            .get_both(mesh_handle)
+            .expect("Failed to get mesh data");
 
         let model_scale = mesh_asset.scale;
         let mesh_center = mesh_asset.center;
@@ -246,6 +261,7 @@ impl AppRenderer for DeferredRenderer {
             );
         }
 
+        let device = context.wgpu_device();
         // Create quad buffer for lighting pass
         let quad_vertex_buffer = create_buffer_from_slice(
             device,
@@ -292,15 +308,14 @@ impl AppRenderer for DeferredRenderer {
         let geometry_pipeline = Self::create_geometry_pipeline(
             device,
             &geometry_bind_group_layout,
-            context.surface_format,
+            context.surface_format(),
             &geometry_shader_src,
         )
         .expect("Failed to create geometry pipeline");
 
-        // Create multiple lights for the scene with radii for culling
+        // Create multiple lights for the scene
         let mut lights: [Light; renderlib::camera::MAX_LIGHTS] =
             [Light::default(); renderlib::camera::MAX_LIGHTS];
-        // Radius defines where light contribution falls to zero (polynomial falloff)
         lights[0] = Light::new([2.0, 3.0, 4.0], [1.0, 1.0, 1.0]); // White light above and to the right
         lights[1] = Light::new([-3.0, 2.0, 2.0], [1.0, 0.0, 0.0]); // Red light to the left
         lights[2] = Light::new([0.0, -2.0, 3.0], [0.0, 0.0, 1.0]); // Blue light below
@@ -336,7 +351,7 @@ impl AppRenderer for DeferredRenderer {
             device,
             &gbuffer.bind_group_layout,
             &lighting_uniform_bind_group_layout,
-            context.surface_format,
+            context.surface_format(),
             &lighting_shader_src,
         )
         .expect("Failed to create lighting pipeline");
@@ -358,7 +373,7 @@ impl AppRenderer for DeferredRenderer {
             depth_texture,
             depth_texture_view,
             gbuffer,
-            surface_format: context.surface_format,
+            surface_format: context.surface_format(),
             model_scale,
             mesh_center,
             should_reload_geometry: false,
@@ -373,7 +388,7 @@ impl AppRenderer for DeferredRenderer {
         }
     }
 
-    fn render(&mut self, context: &mut GraphicsContext) {
+    fn render(&mut self, mut context: RenderContext<'_>) {
         // Calculate delta time for frame-rate independent movement
         let current_time = Instant::now();
         let delta_time = current_time
@@ -393,7 +408,7 @@ impl AppRenderer for DeferredRenderer {
         // Handle shader reload
         if self.should_reload_geometry {
             eprintln!("Reloading geometry shader...");
-            if let Err(e) = self.reload_geometry_shader(&context.device) {
+            if let Err(e) = self.reload_geometry_shader(context.wgpu_device()) {
                 eprintln!("Geometry shader reload failed: {}", e);
             } else {
                 eprintln!("Geometry shader reloaded successfully!");
@@ -402,7 +417,7 @@ impl AppRenderer for DeferredRenderer {
 
         if self.should_reload_lighting {
             eprintln!("Reloading lighting shader...");
-            if let Err(e) = self.reload_lighting_shader(&context.device) {
+            if let Err(e) = self.reload_lighting_shader(context.wgpu_device()) {
                 eprintln!("Lighting shader reload failed: {}", e);
             } else {
                 eprintln!("Lighting shader reloaded successfully!");
@@ -410,15 +425,16 @@ impl AppRenderer for DeferredRenderer {
         }
 
         // Resize G-buffer and depth texture if needed
-        if self.gbuffer.width != context.size.width || self.gbuffer.height != context.size.height {
+        let size = context.size();
+        if self.gbuffer.width != size.width || self.gbuffer.height != size.height {
             self.gbuffer
-                .resize(&context.device, context.size.width, context.size.height);
+                .resize(context.wgpu_device(), size.width, size.height);
 
             // Recreate depth texture with new size
             let (depth_texture, depth_texture_view) = create_depth_texture(
-                &context.device,
-                context.size.width,
-                context.size.height,
+                context.wgpu_device(),
+                size.width,
+                size.height,
                 Some("GLTF Deferred Depth Texture"),
             );
             self.depth_texture = depth_texture;
@@ -427,12 +443,9 @@ impl AppRenderer for DeferredRenderer {
 
         // Calculate matrices
         let elapsed = self.start_time.elapsed().as_secs_f32();
-        let aspect = context.size.width as f32 / context.size.height as f32;
+        let aspect = size.width as f32 / size.height as f32;
 
         // Create model matrix with translation, scaling, and rotation
-        // In column-major matrices (cgmath), transformations are applied right-to-left:
-        // M = R * S * T means vertex is transformed as M * v = R * S * T * v
-        // So T (translation) is applied first, then S (scale), then R (rotation)
         let translation = Matrix4::from_translation(-self.mesh_center);
         let scale_matrix = Matrix4::from_scale(self.model_scale);
         let model = Matrix4::from_angle_y(Rad(elapsed * 0.5))
@@ -442,7 +455,7 @@ impl AppRenderer for DeferredRenderer {
 
         // Update geometry uniform buffer
         let geometry_uniform = GeometryUniform::new(&self.camera, model, aspect);
-        context.queue.write_buffer(
+        context.wgpu_queue().write_buffer(
             &self.geometry_uniform_buffer,
             0,
             bytemuck::cast_slice(&[geometry_uniform]),
@@ -452,24 +465,58 @@ impl AppRenderer for DeferredRenderer {
             &self.camera,
             &self.lights[..self.num_lights as usize],
         );
-        context.queue.write_buffer(
+        context.wgpu_queue().write_buffer(
             &self.lighting_uniform_buffer,
             0,
             bytemuck::cast_slice(&[lighting_uniform]),
         );
 
-        // Get current surface texture
-        let surface_texture = match context.get_current_texture() {
-            Some(texture) => texture,
+        // Get the mesh resource from the cache first (to avoid borrow conflicts)
+        let (_mesh_asset, mesh_resource) = context
+            .state()
+            .mesh_cache
+            .get_both(self.mesh_handle)
+            .expect("Failed to get mesh data");
+
+        // Get current texture view from context
+        let texture_view = match context.get_texture_view() {
+            Some(view) => view,
             None => return,
         };
-        let surface_view = context.create_texture_view(&surface_texture);
 
         // Create command encoder
-        let mut encoder = context.device.create_command_encoder(&Default::default());
+        let mut encoder = context
+            .wgpu_device()
+            .create_command_encoder(&Default::default());
 
         // Create G-buffer bind group for lighting pass
-        let gbuffer_bind_group = self.gbuffer.create_bind_group(&context.device);
+        let gbuffer_bind_group =
+            context
+                .wgpu_device()
+                .create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("GBuffer Bind Group"),
+                    layout: &self.gbuffer.bind_group_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(
+                                &self.gbuffer.position_view,
+                            ),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::TextureView(&self.gbuffer.normal_view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: wgpu::BindingResource::TextureView(&self.gbuffer.albedo_view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 3,
+                            resource: wgpu::BindingResource::Sampler(&self.gbuffer.sampler),
+                        },
+                    ],
+                });
 
         // =====================================================================
         // GEOMETRY PASS: Render mesh to G-buffer
@@ -491,9 +538,6 @@ impl AppRenderer for DeferredRenderer {
                 multiview_mask: None,
             });
 
-            // Get the mesh resource from the cache
-            let mesh_resource = context.mesh_cache.get_resource(self.mesh_handle).unwrap();
-
             // Draw mesh
             geometry_pass.set_pipeline(&self.geometry_pipeline);
             geometry_pass.set_bind_group(0, &self.geometry_bind_group, &[]);
@@ -512,7 +556,7 @@ impl AppRenderer for DeferredRenderer {
             let mut lighting_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Lighting Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &surface_view,
+                    view: &texture_view,
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
@@ -534,20 +578,25 @@ impl AppRenderer for DeferredRenderer {
             lighting_pass.draw(0..6, 0..1);
         }
 
-        // Submit and present
-        context.queue.submit([encoder.finish()]);
-        context.pre_present_notify();
-        context.queue.present(surface_texture);
+        // Submit for rendering (presentation handled by framework)
+        context.wgpu_queue().submit([encoder.finish()]);
     }
 
-    fn resize(&mut self, context: &mut GraphicsContext, new_size: winit::dpi::PhysicalSize<u32>) {
-        // Resize G-buffer
-        self.gbuffer
-            .resize(&context.device, new_size.width, new_size.height);
+    fn resize(&mut self, context: RenderContext<'_>, new_size: winit::dpi::PhysicalSize<u32>) {
+        // Update surface format if needed
+        self.surface_format = context.surface_format();
 
-        // Recreate depth texture with new size
+        // Recreate G-buffer with new size
+        self.gbuffer = GBuffer::new(
+            context.wgpu_device(),
+            new_size.width,
+            new_size.height,
+            Some("Deferred"),
+        );
+
+        // Recreate depth texture with new size using framework helper
         let (depth_texture, depth_texture_view) = create_depth_texture(
-            &context.device,
+            context.wgpu_device(),
             new_size.width,
             new_size.height,
             Some("GLTF Deferred Depth Texture"),
@@ -556,7 +605,7 @@ impl AppRenderer for DeferredRenderer {
         self.depth_texture_view = depth_texture_view;
     }
 
-    fn input(&mut self, event: &WindowEvent) {
+    fn input(&mut self, _context: RenderContext<'_>, event: &WindowEvent) {
         // Forward event to input controller for key state tracking
         self.input_controller.handle_window_event(event);
 
@@ -585,6 +634,7 @@ fn main() {
     // Use Poll control flow for smooth animation
     event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
 
-    let mut app = App::<DeferredRenderer>::new();
+    // Use the new Application struct with improved architecture
+    let mut app = NewApplication::<DeferredRenderer>::new();
     event_loop.run_app(&mut app).unwrap();
 }

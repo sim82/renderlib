@@ -1,4 +1,4 @@
-//! Forward rendering demo with mesh loading.
+//! Forward rendering demo with mesh loading using the new architecture.
 //!
 //! This demo demonstrates:
 //! - Loading a GLTF mesh from disk (defaults to assets/duck.glb)
@@ -7,6 +7,9 @@
 //! - Rendering with perspective projection and lighting
 //! - Smooth rotation of the mesh
 //! - Press R to reload shaders
+//!
+//! Uses the new renderlib framework with clean separation between
+//! GPU infrastructure and application state.
 
 use std::time::Instant;
 
@@ -15,12 +18,12 @@ use winit::event::WindowEvent;
 use winit::event_loop::EventLoop;
 use winit::keyboard::Key;
 
-use renderlib::app::{App, AppRenderer};
-use renderlib::camera::{Camera, GeometryUniform, Light, LightingUniform};
-use renderlib::context::GraphicsContext;
+use renderlib::camera::{GeometryUniform, Light, LightingUniform};
+use renderlib::context::RenderContext;
 use renderlib::device_helpers::*;
 use renderlib::geometry::PosColorNormalVertex;
 use renderlib::mesh::{MeshHandle, MeshSource};
+use renderlib::new_app::{NewAppRenderer, NewApplication};
 
 /// Path to the shader file.
 const SHADER_PATH: &str = "src/shaders/forward.wgsl";
@@ -31,7 +34,7 @@ const SHADER_PATH: &str = "src/shaders/forward.wgsl";
 /// If the file doesn't exist, a built-in cube will be used.
 const DEFAULT_MESH_PATH: &str = "assets/duck.glb";
 
-/// Renderer for the forward rendering demo with lighting.
+/// Renderer for the forward rendering demo with lighting using new architecture.
 pub struct ForwardRenderer {
     mesh_handle: MeshHandle,
     num_indices: u32,
@@ -49,7 +52,6 @@ pub struct ForwardRenderer {
     model_scale: f32,
     /// Translation to center the mesh at origin (computed from bounding box center).
     mesh_center: Vector3<f32>,
-    camera: Camera,
     /// Array of lights for the scene.
     lights: [Light; renderlib::camera::MAX_LIGHTS],
     /// Number of active lights.
@@ -112,17 +114,32 @@ impl ForwardRenderer {
     }
 }
 
-impl AppRenderer for ForwardRenderer {
-    async fn init(context: &GraphicsContext) -> Self {
-        let device = &context.device;
+impl NewAppRenderer for ForwardRenderer {
+    async fn init(mut context: RenderContext<'_>) -> Self {
+        let size = context.size();
+        let surface_format = context.surface_format();
 
-        // Load mesh using the mesh cache
+        // Get camera from app state first
+        let camera = context.state().camera.clone();
+        let aspect = size.width as f32 / size.height as f32;
+
+        // Load mesh using the new mesh cache via context state
         let mesh_source = MeshSource::Path(DEFAULT_MESH_PATH.to_string());
-        let mesh_handle = context.mesh_cache.load(&mesh_source).unwrap();
+        let mesh_handle = context
+            .state()
+            .mesh_cache
+            .load_mut(&mesh_source)
+            .expect("Failed to load mesh");
 
-        // Get the mesh resource for rendering
-        let mesh_resource = context.mesh_cache.get_resource(mesh_handle).unwrap();
-        let mesh_asset = context.mesh_cache.get_asset(mesh_handle).unwrap();
+        // Store mesh handle in app state for potential use elsewhere
+        context.state().set_active_mesh(mesh_handle);
+
+        // Get both mesh asset and resource using immutable access
+        let (mesh_asset, mesh_resource) = context
+            .state()
+            .mesh_cache
+            .get_both(mesh_handle)
+            .expect("Failed to get mesh data");
 
         let model_scale = mesh_asset.scale;
         let mesh_center = mesh_asset.center;
@@ -142,15 +159,9 @@ impl AppRenderer for ForwardRenderer {
         }
 
         // Create depth texture for depth testing using framework helper
-        let (depth_texture, depth_texture_view) = create_depth_texture(
-            device,
-            context.size.width,
-            context.size.height,
-            Some("GLTF Depth Texture"),
-        );
-
-        let camera = Camera::new();
-        let aspect = context.size.width as f32 / context.size.height as f32;
+        let device = context.wgpu_device();
+        let (depth_texture, depth_texture_view) =
+            create_depth_texture(device, size.width, size.height, Some("GLTF Depth Texture"));
 
         // Create geometry uniform buffer for MVP and model matrices
         let geometry_uniform_buffer = create_buffer(
@@ -224,9 +235,8 @@ impl AppRenderer for ForwardRenderer {
         });
 
         // Create initial pipeline
-        let render_pipeline =
-            Self::create_pipeline(device, &bind_group_layout, context.surface_format)
-                .expect("Failed to create initial pipeline");
+        let render_pipeline = Self::create_pipeline(device, &bind_group_layout, surface_format)
+            .expect("Failed to create initial pipeline");
 
         ForwardRenderer {
             mesh_handle,
@@ -236,24 +246,24 @@ impl AppRenderer for ForwardRenderer {
             uniform_bind_group,
             render_pipeline,
             bind_group_layout,
-            surface_format: context.surface_format,
+            surface_format,
             depth_texture,
             depth_texture_view,
             should_reload: false,
             start_time: Instant::now(),
             model_scale,
             mesh_center,
-            camera,
+
             lights,
             num_lights,
         }
     }
 
-    fn render(&mut self, context: &mut GraphicsContext) {
+    fn render(&mut self, mut context: RenderContext<'_>) {
         // Reload shader if requested
         if self.should_reload {
             eprintln!("Reloading forward shader...");
-            if let Err(e) = self.reload_shader(&context.device) {
+            if let Err(e) = self.reload_shader(context.wgpu_device()) {
                 eprintln!("Shader reload failed: {}", e);
             } else {
                 eprintln!("Forward shader reloaded successfully!");
@@ -275,34 +285,35 @@ impl AppRenderer for ForwardRenderer {
             * translation;
 
         // Update geometry uniform buffer
-        let aspect = context.size.width as f32 / context.size.height as f32;
-        let geometry_uniform = GeometryUniform::new(&self.camera, model, aspect);
-        context.queue.write_buffer(
+        let size = context.size();
+        let aspect = size.width as f32 / size.height as f32;
+        let camera = context.state().camera.clone();
+        let geometry_uniform = GeometryUniform::new(&camera, model, aspect);
+        context.wgpu_queue().write_buffer(
             &self.geometry_uniform_buffer,
             0,
             bytemuck::cast_slice(&[geometry_uniform]),
         );
 
         // Update lighting uniform buffer with all lights
-        let lighting_uniform = LightingUniform::new_with_lights(
-            &self.camera,
-            &self.lights[..self.num_lights as usize],
-        );
-        context.queue.write_buffer(
+        let lighting_uniform =
+            LightingUniform::new_with_lights(&camera, &self.lights[..self.num_lights as usize]);
+        context.wgpu_queue().write_buffer(
             &self.lighting_uniform_buffer,
             0,
             bytemuck::cast_slice(&[lighting_uniform]),
         );
 
-        // Get current surface texture
-        let surface_texture = match context.get_current_texture() {
-            Some(texture) => texture,
+        // Get current texture view from context
+        let texture_view = match context.get_texture_view() {
+            Some(view) => view,
             None => return,
         };
-        let texture_view = context.create_texture_view(&surface_texture);
 
         // Clear the screen and draw the mesh
-        let mut encoder = context.device.create_command_encoder(&Default::default());
+        let mut encoder = context
+            .wgpu_device()
+            .create_command_encoder(&Default::default());
 
         let mut renderpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: None,
@@ -329,7 +340,11 @@ impl AppRenderer for ForwardRenderer {
         });
 
         // Get the mesh resource from the cache
-        let mesh_resource = context.mesh_cache.get_resource(self.mesh_handle).unwrap();
+        let (_mesh_asset, mesh_resource) = context
+            .state()
+            .mesh_cache
+            .get_both(self.mesh_handle)
+            .expect("Failed to get mesh data");
 
         // Draw the mesh
         renderpass.set_pipeline(&self.render_pipeline);
@@ -344,16 +359,17 @@ impl AppRenderer for ForwardRenderer {
         // End the renderpass
         drop(renderpass);
 
-        // Submit and present
-        context.queue.submit([encoder.finish()]);
-        context.pre_present_notify();
-        context.queue.present(surface_texture);
+        // Submit for rendering (presentation handled by framework)
+        context.wgpu_queue().submit([encoder.finish()]);
     }
 
-    fn resize(&mut self, context: &mut GraphicsContext, new_size: winit::dpi::PhysicalSize<u32>) {
+    fn resize(&mut self, context: RenderContext<'_>, new_size: winit::dpi::PhysicalSize<u32>) {
+        // Update surface format if needed
+        self.surface_format = context.surface_format();
+
         // Recreate depth texture with new size using framework helper
         let (depth_texture, depth_texture_view) = create_depth_texture(
-            &context.device,
+            context.wgpu_device(),
             new_size.width,
             new_size.height,
             Some("GLTF Depth Texture"),
@@ -362,7 +378,7 @@ impl AppRenderer for ForwardRenderer {
         self.depth_texture_view = depth_texture_view;
     }
 
-    fn input(&mut self, event: &WindowEvent) {
+    fn input(&mut self, _context: RenderContext<'_>, event: &WindowEvent) {
         if let WindowEvent::KeyboardInput {
             event: key_event, ..
         } = event
@@ -385,6 +401,7 @@ fn main() {
     // Use Poll control flow for smooth animation
     event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
 
-    let mut app = App::<ForwardRenderer>::new();
+    // Use the new Application struct with improved architecture
+    let mut app = NewApplication::<ForwardRenderer>::new();
     event_loop.run_app(&mut app).unwrap();
 }
