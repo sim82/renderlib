@@ -13,3 +13,23 @@ thiserror = "2.0.19"
 env_logger = "0.11.11"
 cgmath = "0.18"
 gltf = { version = "1.4.1", features = ["import"] }
+
+[[bin]]
+name = "triangle"
+path = "src/bin/triangle.rs"
+
+[[bin]]
+name = "triangle_new"
+path = "src/bin/triangle_new.rs"
+
+[[bin]]
+name = "forward"
+path = "src/bin/forward.rs"
+
+[[bin]]
+name = "deferred"
+path = "src/bin/deferred.rs"
+
+[[bin]]
+name = "deferred_with_camera_controls"
+path = "src/bin/deferred_with_camera_controls.rs"

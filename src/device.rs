@@ -14,8 +14,12 @@ use winit::window::Window;
 ///
 /// This provides thread-safe access to the surface configuration
 /// and allows for surface reconfiguration when the window is resized.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct SurfaceConfig {
+    /// The wgpu instance (needed for surface recreation)
+    pub instance: wgpu::Instance,
+    /// The window (needed for surface recreation)
+    pub window: Arc<Window>,
     /// The wgpu surface, protected by a mutex for thread safety
     pub surface: Arc<Mutex<wgpu::Surface<'static>>>,
     /// The surface texture format
@@ -27,11 +31,15 @@ pub struct SurfaceConfig {
 impl SurfaceConfig {
     /// Create a new surface configuration.
     pub fn new(
+        instance: wgpu::Instance,
+        window: Arc<Window>,
         surface: wgpu::Surface<'static>,
         format: wgpu::TextureFormat,
         size: winit::dpi::PhysicalSize<u32>,
     ) -> Self {
         Self {
+            instance,
+            window,
             surface: Arc::new(Mutex::new(surface)),
             format,
             size,
@@ -112,8 +120,13 @@ impl SurfaceConfig {
             }
             wgpu::CurrentSurfaceTexture::Lost => {
                 // Surface is lost, need to recreate
-                // For now, just reconfigure - full recreation would require more context
                 drop(surface);
+                // Recreate the surface
+                let new_surface = self
+                    .instance
+                    .create_surface(self.window.clone())
+                    .expect("Failed to recreate surface");
+                *self.surface.lock().unwrap() = new_surface;
                 self.configure(device);
                 None
             }
@@ -149,7 +162,7 @@ impl SurfaceConfig {
 /// // Share it across threads using Arc
 /// let device_arc = Arc::new(device);
 /// ```
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct GraphicsDevice {
     /// The wgpu instance
     pub instance: wgpu::Instance,
@@ -207,7 +220,13 @@ impl GraphicsDevice {
         let surface_format = cap.formats[0];
 
         // Create surface config
-        let surface_config = SurfaceConfig::new(surface, surface_format, size);
+        let surface_config = SurfaceConfig::new(
+            instance.clone(),
+            window.clone(),
+            surface,
+            surface_format,
+            size,
+        );
 
         // Configure surface for the first time
         surface_config.configure(&device);

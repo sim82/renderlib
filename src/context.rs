@@ -161,8 +161,8 @@ pub struct RenderContext<'a> {
     device: &'a GraphicsDevice,
     /// Mutable application state
     state: &'a mut AppState,
-    /// Current surface texture (optional, for rendering)
-    surface_texture: Option<wgpu::SurfaceTexture>,
+    /// Current texture view (optional, for rendering)
+    texture_view: Option<wgpu::TextureView>,
 }
 
 impl<'a> RenderContext<'a> {
@@ -172,16 +172,16 @@ impl<'a> RenderContext<'a> {
     ///
     /// * `device` - Reference to the GPU infrastructure
     /// * `state` - Mutable reference to the application state
-    /// * `surface_texture` - Optional surface texture for the current frame
+    /// * `texture_view` - Optional texture view for the current frame
     pub fn new(
         device: &'a GraphicsDevice,
         state: &'a mut AppState,
-        surface_texture: Option<wgpu::SurfaceTexture>,
+        texture_view: Option<wgpu::TextureView>,
     ) -> Self {
         Self {
             device,
             state,
-            surface_texture,
+            texture_view,
         }
     }
 
@@ -205,27 +205,22 @@ impl<'a> RenderContext<'a> {
         self.state
     }
 
-    /// Take the current surface texture, leaving None in its place.
-    /// This is used when the texture needs to be presented after rendering.
-    pub fn take_surface_texture(&mut self) -> Option<wgpu::SurfaceTexture> {
-        self.surface_texture.take()
+    /// Take the current texture view, leaving None in its place.
+    /// This is used when the texture view is no longer needed.
+    pub fn take_texture_view(&mut self) -> Option<wgpu::TextureView> {
+        self.texture_view.take()
     }
 
-    /// Get the current surface texture.
-    pub fn surface_texture(&self) -> Option<&wgpu::SurfaceTexture> {
-        self.surface_texture.as_ref()
+    /// Get the current texture view.
+    pub fn texture_view(&self) -> Option<&wgpu::TextureView> {
+        self.texture_view.as_ref()
     }
 
-    /// Get a texture view from the current surface texture.
+    /// Get the texture view.
     ///
-    /// Returns None if no surface texture is available.
-    pub fn get_texture_view(&self) -> Option<wgpu::TextureView> {
-        self.surface_texture.as_ref().map(|texture| {
-            texture.texture.create_view(&wgpu::TextureViewDescriptor {
-                format: Some(self.device.surface_config.format.add_srgb_suffix()),
-                ..Default::default()
-            })
-        })
+    /// Returns the texture view that was passed to the context, or None if not available.
+    pub fn get_texture_view(&self) -> Option<&wgpu::TextureView> {
+        self.texture_view.as_ref()
     }
 
     /// Request a redraw of the window.

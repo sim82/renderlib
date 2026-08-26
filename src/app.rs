@@ -155,7 +155,10 @@ impl<R: AppRenderer + 'static> Application<R> {
     ) -> RenderContext {
         let device = self.device.as_ref().expect("Device not initialized");
         let state = self.state.as_mut().expect("State not initialized");
-        RenderContext::new(device, state, surface_texture)
+        // Convert surface_texture to texture_view
+        let texture_view =
+            surface_texture.map(|texture| device.surface_config.create_texture_view(&texture));
+        RenderContext::new(device, state, texture_view)
     }
 }
 
