@@ -112,7 +112,7 @@ impl<R: NewAppRenderer + 'static> ApplicationHandler for NewApplication<R> {
         let state = self.state.as_mut().expect("State not initialized");
         let renderer = self.renderer.as_mut().expect("Renderer not initialized");
 
-        match event {
+        match event.clone() {
             WindowEvent::CloseRequested => {
                 event_loop.exit();
             }
@@ -155,11 +155,15 @@ impl<R: NewAppRenderer + 'static> ApplicationHandler for NewApplication<R> {
                     event_loop.exit();
                     return;
                 }
-            }
-            other_event => {
-                // Forward other events to renderer for input handling
+
+                // Forward keyboard input to renderer for input handling
                 let context = RenderContext::new(device, state, None);
-                renderer.input(context, &other_event);
+                renderer.input(context, &event);
+            }
+            _ => {
+                // Forward all events to renderer for input handling
+                let context = RenderContext::new(device, state, None);
+                renderer.input(context, &event);
             }
         }
     }

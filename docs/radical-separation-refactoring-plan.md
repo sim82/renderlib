@@ -2,18 +2,18 @@
 
 ## 🎯 Progress Summary
 
-**Overall Progress: 4/6 Phases Completed (66%)**  
+**Overall Progress: 5/6 Phases Completed (83%)**  
 **Last Updated: 2026-08-26**  
 **Status: ✅ ON TRACK**
 
 | Phase | Status | Completion | Notes |
 |-------|--------|-------------|-------|
 | Phase 0: Preparation | ✅ COMPLETED | 100% | Architecture analysis complete |
-| Phase 1: Infrastructure | ✅ PARTIALLY COMPLETED | 75% | GraphicsDevice & AppState created, RenderContext moved to Phase 3 |
+| Phase 1: Infrastructure | ✅ COMPLETED | 100% | GraphicsDevice & AppState created |
 | Phase 2: MeshCache Cleanup | ✅ COMPLETED | 100% | load_mut added, source deduplication implemented |
 | Phase 3: Framework Updates | ✅ COMPLETED | 100% | NewApplication, RenderContext, NewAppRenderer trait |
-| Phase 4: Renderer Migration | ✅ PARTIALLY COMPLETED | 50% | triangle_new.rs completed & working, 3 renderers remaining |
-| Phase 5: Testing & Validation | ⏳ PARTIALLY COMPLETED | 50% | triangle_new tested & working, others await migration |
+| Phase 4: Renderer Migration | ✅ COMPLETED | 100% | All 4 renderers migrated: triangle_new.rs ✅, forward_new.rs ✅, deferred_new.rs ✅, deferred_with_camera_controls_new.rs ✅ |
+| Phase 5: Testing & Validation | ⏳ NOT STARTED | 0% | All new renderers compile successfully, runtime testing needed |
 | Phase 6: Cleanup & Documentation | ⬜ NOT STARTED | 0% | Remove RefCell from MeshCache, remove old load() method |
 
 **Key Metrics:**
@@ -212,55 +212,113 @@ This document outlines the comprehensive plan to refactor the renderlib architec
 **Completion Date:** 2026-08-26
 
 ##### 4.2: Forward Renderer (`src/bin/forward_new.rs`)
-- [ ] Create new file using new architecture
-- [ ] Implement `NewAppRenderer` trait
-- [ ] Change mesh loading to use `context.state().mesh_cache.load_mut()`
-- [ ] Update mesh access to use immutable `get_both()`
-- [ ] Update camera access to use `context.state().camera`
-- [ ] Update main() to use `NewApplication` instead of `App`
+- [x] Create new file using new architecture
+- [x] Implement `NewAppRenderer` trait
+- [x] Change mesh loading to use `context.state().mesh_cache.load_mut()`
+- [x] Update mesh access to use immutable `get_both()`
+- [x] Update camera access to use `context.state().camera`
+- [x] Update lighting to use `context.state().time` for animations if needed
+- [x] Replace `GraphicsContext` with `RenderContext` in all method signatures
+- [x] Replace `context.device` with `context.wgpu_device()`
+- [x] Replace `context.queue` with `context.wgpu_queue()`
+- [x] Replace `context.get_current_texture()` with `context.get_texture_view()`
+- [x] Remove `context.pre_present_notify()` and `context.queue.present()` calls (handled by framework)
+- [x] Update main() to use `NewApplication` instead of `App`
 - [ ] Test and verify rendering works correctly
 
 **Estimated Duration:** 1-2 days  
-**Status:** ⏳ NOT STARTED (Framework ready, triangle_new working)  
+**Status:** ✅ COMPLETED (Compiles successfully, runtime testing pending)  
 **Owner:** Renderer Team
+**Completion Date:** 2026-08-26
+**Dependencies:** triangle_new.rs completion
+**Pattern Reference:** Follow triangle_new.rs structure - move mesh_handle to AppState, access via context.state()
+**Key Changes:**
+- `mesh_handle` stored in renderer struct (not AppState to maintain existing behavior)
+- Use `context.state().mesh_cache.get_both(mesh_handle)` to access mesh data
+- Camera accessed via `context.state().camera` in render method
+- Depth texture management kept in renderer for now
 
 ##### 4.3: Deferred Renderer (`src/bin/deferred_new.rs`)
-- [ ] Create new file using new architecture
-- [ ] Implement `NewAppRenderer` trait
-- [ ] Change all resource loading to use new context
-- [ ] Update mesh access patterns
-- [ ] Update camera and lighting access
-- [ ] Update main() to use `NewApplication` instead of `App`
+- [x] Create new file using new architecture
+- [x] Implement `NewAppRenderer` trait
+- [x] Change mesh loading to use `context.state().mesh_cache.load_mut()`
+- [x] Update mesh access to use immutable `get_both()` for both geometry and lighting passes
+- [x] Update camera access to use `context.state().camera`
+- [x] Update lighting access to use `context.state().camera` for view position
+- [x] Replace `GraphicsContext` with `RenderContext` in all method signatures
+- [x] Replace device/queue access with `context.wgpu_device()` and `context.wgpu_queue()`
+- [x] Replace surface texture management with `context.get_texture_view()`
+- [x] G-buffer creation handled via new context methods
+- [x] Update geometry and lighting uniform buffer updates to use new context
+- [x] Update main() to use `NewApplication` instead of `App`
 - [ ] Test and verify rendering works correctly
 
 **Estimated Duration:** 2-3 days  
-**Status:** ⏳ NOT STARTED (Framework ready, triangle_new working)  
+**Status:** ✅ COMPLETED (Compiles successfully, runtime testing pending)  
 **Owner:** Renderer Team
+**Completion Date:** 2026-08-26
+**Dependencies:** triangle_new.rs completion
+**Pattern Reference:** Follow triangle_new.rs structure
+**Key Changes:**
+- `mesh_handle` stored in renderer struct
+- G-buffer management adapted to new architecture (created in init, resized in resize)
+- Both geometry and lighting passes use new context access patterns
+- Depth texture management handled via context in resize method
+- Light array and count can be stored in AppState if shared across renderers
 
 ##### 4.4: Deferred with Camera Controls (`src/bin/deferred_with_camera_controls_new.rs`)
-- [ ] Create new file using new architecture
-- [ ] Implement `NewAppRenderer` trait
-- [ ] Change camera control logic to update `context.state().camera`
-- [ ] Update mesh loading and access
-- [ ] Update input handling to use new context
-- [ ] Update main() to use `NewApplication` instead of `App`
+- [x] Create new file using new architecture
+- [x] Implement `NewAppRenderer` trait
+- [x] Change mesh loading to use `context.state().mesh_cache.load_mut()`
+- [x] Update mesh access to use immutable `get_both()`
+- [x] Change camera control logic to update `context.state().camera`
+- [x] Update input handling to use `context.state().input` for input state
+- [x] Replace `InputController` and `PlayerState` with framework input handling
+- [x] Update camera movement to modify `context.state().camera` in render() method
+- [x] Replace `GraphicsContext` with `RenderContext` in all method signatures
+- [x] Replace device/queue access with context methods
+- [x] Replace surface texture management with `context.get_texture_view()`
+- [x] Update main() to use `NewApplication` instead of `App`
 - [ ] Test and verify rendering works correctly
 
 **Estimated Duration:** 2-3 days  
-**Status:** ⏳ NOT STARTED (Framework ready, triangle_new working)  
+**Status:** ✅ COMPLETED (Compiles successfully, runtime testing pending)  
 **Owner:** Renderer Team
+**Completion Date:** 2026-08-26
+**Dependencies:** triangle_new.rs completion, AppState input system
+**Pattern Reference:** Follow triangle_new.rs structure with added input handling
+**Key Changes:**
+- Removed `PlayerState` and `InputController` from renderer struct
+- Camera movement logic in `update_camera_from_input()` method, modifying `context.state().camera`
+- Uses `context.state().input` to track keyboard/mouse state
+- Mesh handle stored in renderer struct
+- Mouse grab toggle with 'm' key
+- Uses Camera's built-in movement methods (move_forward, move_backward, etc.)
+- Mouse look implemented via direct camera target manipulation
 
 #### Files Modified
-- `src/bin/triangle.rs`
-- `src/bin/forward.rs`
-- `src/bin/deferred.rs`
-- `src/bin/deferred_with_camera_controls.rs`
+- `src/bin/triangle.rs` - Keep as legacy reference
+- `src/bin/forward.rs` - Keep as legacy reference
+- `src/bin/deferred.rs` - Keep as legacy reference
+- `src/bin/deferred_with_camera_controls.rs` - Keep as legacy reference
+
+#### New Files Created
+- ✅ `src/bin/triangle_new.rs` - New architecture implementation (reference)
+- ✅ `src/bin/forward_new.rs` - New architecture implementation
+- ✅ `src/bin/deferred_new.rs` - New architecture implementation  
+- ✅ `src/bin/deferred_with_camera_controls_new.rs` - New architecture implementation
 
 **Dependencies:** Phase 3  
 **Estimated Duration:** 1-2 weeks (parallelizable)  
-**Status:** ⏳ PARTIALLY COMPLETED (Framework ready, renderers still use old methods)  
+**Status:** ✅ COMPLETED (All renderers migrated and compile successfully)  
 **Owner:** Renderer Team  
-**Completion Date:** 2026-08-26 (Framework only)
+**Completion Date:** 2026-08-26
+**Next Steps:** 
+1. ✅ forward_new.rs - Completed and compiles
+2. ✅ deferred_new.rs - Completed and compiles  
+3. ✅ deferred_with_camera_controls_new.rs - Completed and compiles
+
+**All Phase 4 tasks completed! Ready for Phase 5 testing and validation.**
 
 ---
 
@@ -407,23 +465,145 @@ This document outlines the comprehensive plan to refactor the renderlib architec
 
 ### Renderer Migration Checklist (per renderer)
 
-For each renderer (`triangle.rs`, `forward.rs`, `deferred.rs`, `deferred_with_camera_controls.rs`):
+For each renderer (`forward_new.rs`, `deferred_new.rs`, `deferred_with_camera_controls_new.rs`):
 
-- [ ] Update imports to include new types
-- [ ] Change `AppRenderer` implementation to use new trait
-- [ ] Update `init()` to take `RenderContext`
-  - [ ] Extract device from `context.device`
-  - [ ] Access mesh cache via `context.state.mesh_cache`
-  - [ ] Load meshes with mutable access
-  - [ ] Get mesh data with immutable access
-- [ ] Update `render()` to take `RenderContext`
-  - [ ] Access device/queue via context
-  - [ ] Access mesh cache via context
-  - [ ] Access camera via `context.state.camera`
-- [ ] Update `resize()` to take `RenderContext`
-- [ ] Update `input()` to take `RenderContext` (if implemented)
-- [ ] Update any direct GraphicsContext access
-- [ ] Test compilation
+#### Common Changes (Apply to all renderers)
+- [ ] Update imports: replace `renderlib::app::{App, AppRenderer}` with `renderlib::new_app::{NewAppRenderer, NewApplication}`
+- [ ] Update imports: replace `renderlib::context::GraphicsContext` with `renderlib::context::RenderContext`
+- [ ] Change trait implementation from `AppRenderer` to `NewAppRenderer`
+- [ ] Update `init()` signature: `async fn init(mut context: RenderContext<'_>) -> Self`
+- [ ] Update `render()` signature: `fn render(&mut self, mut context: RenderContext<'_>)`
+- [ ] Update `resize()` signature: `fn resize(&mut self, context: RenderContext<'_>, new_size: winit::dpi::PhysicalSize<u32>)`
+- [ ] Update `input()` signature: `fn input(&mut self, _context: RenderContext<'_>, event: &WindowEvent)`
+
+#### Device/Queue Access
+- [ ] Replace `context.device` with `context.wgpu_device()`
+- [ ] Replace `context.queue` with `context.wgpu_queue()`
+- [ ] Replace `&context.device` with `context.wgpu_device()`
+- [ ] Replace `&context.queue` with `context.wgpu_queue()`
+
+#### Surface/Texture Management
+- [ ] Replace `context.get_current_texture()` with `context.get_texture_view()`
+- [ ] Replace `context.create_texture_view(&surface_texture)` with `context.get_texture_view()`
+- [ ] Remove `context.pre_present_notify()` calls (handled by framework)
+- [ ] Remove `context.queue.present(surface_texture)` calls (handled by framework)
+- [ ] Replace `context.surface_format` with `context.surface_format()`
+- [ ] Replace `context.size` with `context.size()`
+
+#### Mesh System Migration
+- [ ] Replace `context.mesh_cache.load(&mesh_source)` with `context.state().mesh_cache.load_mut(&mesh_source)`
+- [ ] Replace `context.mesh_cache.get_resource(mesh_handle)` and `context.mesh_cache.get_asset(mesh_handle)` with `context.state().mesh_cache.get_both(mesh_handle)`
+- [ ] Store mesh handles in `context.state().active_mesh` instead of renderer struct
+- [ ] Access mesh data via `let (mesh_asset, mesh_resource) = context.state().mesh_cache.get_both(mesh_handle).unwrap();`
+
+#### Camera System Migration
+- [ ] Replace local `camera: Camera` field with access via `context.state().camera`
+- [ ] Update camera modifications to update `context.state().camera`
+- [ ] Replace `&self.camera` with `&context.state().camera` in uniform creation
+
+#### Main Function Updates
+- [ ] Replace `App::<Renderer>::new()` with `NewApplication::<Renderer>::new()`
+- [ ] Keep event loop setup the same
+
+#### Testing
+- [ ] Test compilation with `cargo check`
+- [ ] Test runtime functionality
+- [ ] Verify shader reloading still works
+- [ ] Verify mesh loading and rendering works correctly
+
+#### Specific per-renderer notes:
+**forward_new.rs:**
+- Move `mesh_handle`, `model_scale`, `mesh_center` to AppState or access via context
+- Depth texture management may need framework support
+
+**deferred_new.rs:**
+- G-buffer creation may need to be adapted to new architecture
+- Both geometry and lighting passes need context access
+- Consider moving G-buffer to AppState if shared
+
+**deferred_with_camera_controls_new.rs:**
+- Remove `PlayerState` and `InputController` from renderer struct
+- Use `context.state().input` for input tracking
+- Camera movement logic in `input()` method should modify `context.state().camera`
+
+### Migration Examples (Based on triangle_new.rs)
+
+#### Before (Old Architecture - forward.rs):
+```rust
+use renderlib::app::{App, AppRenderer};
+use renderlib::context::GraphicsContext;
+
+impl AppRenderer for ForwardRenderer {
+    async fn init(context: &GraphicsContext) -> Self {
+        let device = &context.device;
+        let mesh_source = MeshSource::Path(DEFAULT_MESH_PATH.to_string());
+        let mesh_handle = context.mesh_cache.load(&mesh_source).unwrap();
+        let mesh_resource = context.mesh_cache.get_resource(mesh_handle).unwrap();
+        let mesh_asset = context.mesh_cache.get_asset(mesh_handle).unwrap();
+        // ...
+    }
+
+    fn render(&mut self, context: &mut GraphicsContext) {
+        let surface_texture = match context.get_current_texture() {
+            Some(texture) => texture,
+            None => return,
+        };
+        let texture_view = context.create_texture_view(&surface_texture);
+        // ...
+        context.queue.submit([encoder.finish()]);
+        context.pre_present_notify();
+        context.queue.present(surface_texture);
+    }
+}
+
+fn main() {
+    let mut app = App::<ForwardRenderer>::new();
+    event_loop.run_app(&mut app).unwrap();
+}
+```
+
+#### After (New Architecture - forward_new.rs):
+```rust
+use renderlib::new_app::{NewAppRenderer, NewApplication};
+use renderlib::context::RenderContext;
+
+impl NewAppRenderer for ForwardRenderer {
+    async fn init(mut context: RenderContext<'_>) -> Self {
+        let device = context.wgpu_device();
+        let mesh_source = MeshSource::Path(DEFAULT_MESH_PATH.to_string());
+        let mesh_handle = context.state().mesh_cache.load_mut(&mesh_source).unwrap();
+        let (mesh_asset, mesh_resource) = context.state().mesh_cache.get_both(mesh_handle).unwrap();
+        // Store mesh_handle in context.state().active_mesh if needed
+        // ...
+    }
+
+    fn render(&mut self, mut context: RenderContext<'_>) {
+        let texture_view = match context.get_texture_view() {
+            Some(view) => view,
+            None => return,
+        };
+        // ...
+        context.wgpu_queue().submit([encoder.finish()]);
+        // No need for pre_present_notify() or present() - handled by framework
+    }
+}
+
+fn main() {
+    let mut app = NewApplication::<ForwardRenderer>::new();
+    event_loop.run_app(&mut app).unwrap();
+}
+```
+
+#### Key Pattern Changes:
+1. **Context Type**: `GraphicsContext` → `RenderContext<'_>`
+2. **Device Access**: `context.device` → `context.wgpu_device()`
+3. **Queue Access**: `context.queue` → `context.wgpu_queue()`
+4. **Mesh Loading**: `context.mesh_cache.load()` → `context.state().mesh_cache.load_mut()`
+5. **Mesh Access**: Separate `get_resource()` + `get_asset()` → Combined `get_both()`
+6. **Texture Access**: `get_current_texture()` + `create_texture_view()` → `get_texture_view()`
+7. **App Type**: `App<Renderer>` → `NewApplication<Renderer>`
+8. **Trait**: `AppRenderer` → `NewAppRenderer`
+9. **Presentation**: Remove manual `pre_present_notify()` and `present()` calls
 
 ---
 
