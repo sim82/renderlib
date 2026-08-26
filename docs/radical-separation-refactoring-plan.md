@@ -1,0 +1,581 @@
+# Mesh Resource Architecture Refactoring Plan
+
+## Overview
+
+This document outlines the comprehensive plan to refactor the renderlib architecture from the current mixed-concern design to a clean separation between **immutable GPU infrastructure** and **mutable application state**.
+
+### Current Issues
+
+1. **`GraphicsContext` contains `MeshCache`** - Mixes immutable GPU state with mutable cache state
+2. **`MeshCache` uses `RefCell`** - Interior mutability adds runtime overhead and reduces type safety
+3. **`AppRenderer::init` takes `&GraphicsContext`** - Prevents mutation during initialization
+4. **Conceptual mixing** - GPU resources (immutable) vs cache state (mutable) in same struct
+
+### Target Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Application Framework                       │
+├─────────────────────────────────────────────────────────────┤
+│  GraphicsDevice (Immutable Infrastructure)                    │
+│  ├── wgpu::Instance                                           │
+│  ├── Arc<wgpu::Device>                                        │
+│  ├── Arc<wgpu::Queue>                                         │
+│  ├── SurfaceConfig                                            │
+│  └── Arc<Window>                                              │
+│                                                               │
+│  AppState (Mutable Application State)                        │
+│  ├── MeshCache                                                │
+│  │   ├── HashMap<MeshHandle, Arc<MeshAsset>>                 │
+│  │   └── HashMap<MeshHandle, Arc<MeshResource>>              │
+│  ├── Camera                                                   │
+│  ├── Scene                                                    │
+│  └── InputState                                               │
+│                                                               │
+│  RenderContext<'a> (Temporary Borrow)                         │
+│  ├── &'a GraphicsDevice                                      │
+│  └── &'a mut AppState                                         │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Phases
+
+### Phase 0: Preparation ✅ COMPLETED
+
+- [x] Analyze current architecture
+- [x] Identify all dependencies and usage patterns
+- [x] Document current issues and constraints
+- [x] Design target architecture
+- [x] Create this refactoring plan
+
+**Estimated Duration:** 1 day  
+**Status:** COMPLETED  
+**Owner:** Architecture Team
+
+---
+
+### Phase 1: Infrastructure - Create New Type Definitions
+
+**Goal:** Introduce new type definitions without breaking existing code.
+
+#### Tasks
+
+- [ ] Create `GraphicsDevice` struct in `src/device.rs`
+  - [ ] Move device, queue, instance from GraphicsContext
+  - [ ] Add `SurfaceConfig` with Mutex for thread-safe surface access
+  - [ ] Implement `new()` constructor
+  - [ ] Add convenience methods for common operations
+  - [ ] Derive `Clone` for sharing across threads
+
+- [ ] Create `AppState` struct in `src/state.rs`
+  - [ ] Move `MeshCache` from GraphicsContext
+  - [ ] Add camera, scene, input state fields
+  - [ ] Implement `new(device: &wgpu::Device)` constructor
+  - [ ] Add getter/setter methods as needed
+
+- [ ] Create `RenderContext<'a>` struct in `src/context.rs`
+  - [ ] Hold references to `GraphicsDevice` and `AppState`
+  - [ ] Implement convenience accessors
+  - [ ] Add `get_texture_view()` method
+
+- [ ] Update module exports in `src/lib.rs`
+  - [ ] Export new types alongside existing ones
+  - [ ] Maintain backward compatibility
+
+#### Files Modified
+- `src/device.rs` (NEW)
+- `src/state.rs` (NEW)
+- `src/context.rs` (MODIFY)
+- `src/lib.rs` (MODIFY)
+
+**Estimated Duration:** 2-3 days  
+**Status:** NOT STARTED  
+**Owner:** Core Team
+
+---
+
+### Phase 2: MeshCache Cleanup
+
+**Goal:** Remove interior mutability from MeshCache.
+
+#### Tasks
+
+- [ ] Update `MeshCache` in `src/mesh.rs`
+  - [ ] Remove `RefCell` from `cpu_assets` and `gpu_resources`
+  - [ ] Change `load()` to take `&mut self`
+  - [ ] Update all internal methods to use direct mutation
+  - [ ] Add `loaders` HashMap for deduplication
+  - [ ] Add `get_both()` convenience method
+
+- [ ] Update `MeshCache` documentation
+  - [ ] Document mutability requirements
+  - [ ] Update examples in doc comments
+
+#### Files Modified
+- `src/mesh.rs` (MODIFY)
+
+**Dependencies:** Phase 1 (AppState needs MeshCache)  
+**Estimated Duration:** 1-2 days  
+**Status:** NOT STARTED  
+**Owner:** Mesh Team
+
+---
+
+### Phase 3: Framework Updates
+
+**Goal:** Update the application framework to use new architecture.
+
+#### Tasks
+
+- [ ] Create new `Application` struct in `src/app.rs`
+  - [ ] Replace `App` with `Application<R>`
+  - [ ] Hold separate `GraphicsDevice` and `AppState`
+  - [ ] Implement `ApplicationHandler` for winit
+
+- [ ] Update `AppRenderer` trait
+  - [ ] Change `init()` to take `RenderContext`
+  - [ ] Change `render()` to take `RenderContext`
+  - [ ] Change `resize()` to take `RenderContext`
+  - [ ] Add `input()` and `pre_present()` with `RenderContext`
+
+- [ ] Maintain backward compatibility
+  - [ ] Keep old `App` and `AppRenderer` with deprecation warnings
+  - [ ] Provide default implementations that bridge old to new
+
+#### Files Modified
+- `src/app.rs` (MODIFY)
+
+**Dependencies:** Phase 1, Phase 2  
+**Estimated Duration:** 2-3 days  
+**Status:** NOT STARTED  
+**Owner:** Framework Team
+
+---
+
+### Phase 4: Renderer Migration
+
+**Goal:** Migrate all existing renderers to the new architecture.
+
+#### Tasks by Renderer
+
+##### 4.1: Triangle Renderer (`src/bin/triangle.rs`)
+- [ ] Update `AppRenderer` implementation
+- [ ] Change `init()` to use `RenderContext`
+- [ ] Change `render()` to use `RenderContext`
+- [ ] Update buffer creation to use new device access
+
+**Estimated Duration:** 1 day  
+**Status:** NOT STARTED  
+**Owner:** Renderer Team
+
+##### 4.2: Forward Renderer (`src/bin/forward.rs`)
+- [ ] Update `AppRenderer` implementation
+- [ ] Change mesh loading to use `context.state.mesh_cache`
+- [ ] Update mesh access to use immutable `get_both()`
+- [ ] Update camera access to use `context.state.camera`
+
+**Estimated Duration:** 1-2 days  
+**Status:** NOT STARTED  
+**Owner:** Renderer Team
+
+##### 4.3: Deferred Renderer (`src/bin/deferred.rs`)
+- [ ] Update `AppRenderer` implementation
+- [ ] Change all resource loading to use new context
+- [ ] Update mesh access patterns
+- [ ] Update camera and lighting access
+
+**Estimated Duration:** 2-3 days  
+**Status:** NOT STARTED  
+**Owner:** Renderer Team
+
+##### 4.4: Deferred with Camera Controls (`src/bin/deferred_with_camera_controls.rs`)
+- [ ] Update `AppRenderer` implementation
+- [ ] Change camera control logic to update `context.state.camera`
+- [ ] Update mesh loading and access
+- [ ] Update input handling
+
+**Estimated Duration:** 2-3 days  
+**Status:** NOT STARTED  
+**Owner:** Renderer Team
+
+#### Files Modified
+- `src/bin/triangle.rs`
+- `src/bin/forward.rs`
+- `src/bin/deferred.rs`
+- `src/bin/deferred_with_camera_controls.rs`
+
+**Dependencies:** Phase 3  
+**Estimated Duration:** 1-2 weeks (parallelizable)  
+**Status:** NOT STARTED  
+**Owner:** Renderer Team
+
+---
+
+### Phase 5: Testing and Validation
+
+**Goal:** Ensure all functionality works correctly with the new architecture.
+
+#### Tasks
+
+- [ ] Update existing tests in `tests/mesh_test.rs`
+  - [ ] Change test setup to use new types
+  - [ ] Update mesh loading tests
+  - [ ] Update resource access tests
+
+- [ ] Add new tests for `GraphicsDevice`
+  - [ ] Test device creation
+  - [ ] Test surface configuration
+  - [ ] Test thread safety
+
+- [ ] Add new tests for `AppState`
+  - [ ] Test state initialization
+  - [ ] Test mesh cache operations
+  - [ ] Test state mutation
+
+- [ ] Add new tests for `RenderContext`
+  - [ ] Test context creation
+  - [ ] Test accessor methods
+  - [ ] Test lifetime management
+
+- [ ] Integration testing
+  - [ ] Test each renderer individually
+  - [ ] Test multi-renderer scenarios
+  - [ ] Test resize handling
+  - [ ] Test input handling
+
+- [ ] Performance testing
+  - [ ] Compare before/after performance
+  - [ ] Verify no `RefCell` overhead removed
+  - [ ] Check memory usage patterns
+
+#### Files Modified
+- `tests/mesh_test.rs` (MODIFY)
+- `tests/device_test.rs` (NEW)
+- `tests/state_test.rs` (NEW)
+- `tests/context_test.rs` (NEW)
+
+**Dependencies:** Phase 4  
+**Estimated Duration:** 3-5 days  
+**Status:** NOT STARTED  
+**Owner:** QA Team
+
+---
+
+### Phase 6: Cleanup and Documentation
+
+**Goal:** Remove old code, update documentation, and finalize the migration.
+
+#### Tasks
+
+- [ ] Remove deprecated code
+  - [ ] Remove old `App` struct
+  - [ ] Remove old `AppRenderer` trait methods
+  - [ ] Remove backward compatibility shims
+
+- [ ] Update all documentation
+  - [ ] Update module-level docs in `lib.rs`
+  - [ ] Update type documentation
+  - [ ] Update method documentation
+  - [ ] Add architecture overview in `ARCHITECTURE.md`
+
+- [ ] Update examples
+  - [ ] Update any example code in docs
+  - [ ] Update README examples
+
+- [ ] Final validation
+  - [ ] Run `cargo check`
+  - [ ] Run `cargo test`
+  - [ ] Run `cargo build --all`
+  - [ ] Run all binaries to verify
+
+#### Files Modified
+- `src/app.rs` (MODIFY)
+- `src/lib.rs` (MODIFY)
+- `ARCHITECTURE.md` (NEW)
+- `README.md` (MODIFY)
+
+**Dependencies:** Phase 5  
+**Estimated Duration:** 2-3 days  
+**Status:** NOT STARTED  
+**Owner:** Documentation Team
+
+---
+
+## Detailed Task Breakdown
+
+### GraphicsDevice Implementation Checklist
+
+- [ ] Define `GraphicsDevice` struct
+- [ ] Implement `new()` constructor
+- [ ] Implement `Clone` derive
+- [ ] Create `SurfaceConfig` inner struct
+- [ ] Implement surface locking mechanism
+- [ ] Add `configure_surface()` method
+- [ ] Add `resize()` method
+- [ ] Add `get_current_texture()` method
+- [ ] Add convenience accessors for device/queue
+- [ ] Add documentation for all methods
+
+### AppState Implementation Checklist
+
+- [ ] Define `AppState` struct
+- [ ] Move `MeshCache` from GraphicsContext
+- [ ] Add `Camera` field
+- [ ] Add `Scene` field (placeholder for future)
+- [ ] Add `InputState` field
+- [ ] Add `UiState` field (placeholder)
+- [ ] Add `TimeState` field (placeholder)
+- [ ] Implement `new(device: &wgpu::Device)` constructor
+- [ ] Add getter methods for all fields
+- [ ] Add setter methods where appropriate
+- [ ] Add documentation for all methods
+
+### MeshCache Refactoring Checklist
+
+- [ ] Remove `use std::cell::RefCell` import
+- [ ] Change `cpu_assets` from `RefCell<HashMap<...>>` to `HashMap<...>`
+- [ ] Change `gpu_resources` from `RefCell<HashMap<...>>` to `HashMap<...>`
+- [ ] Add `loaders: HashMap<MeshSource, MeshHandle>` field
+- [ ] Change `load()` signature to `fn load(&mut self, source: &MeshSource)`
+- [ ] Update `load()` implementation to use direct mutation
+- [ ] Update `get_asset()` to not use RefCell
+- [ ] Update `get_resource()` to not use RefCell
+- [ ] Add `get_both()` method
+- [ ] Update `generate_handle()` if needed
+- [ ] Update all error handling
+- [ ] Update documentation
+
+### Renderer Migration Checklist (per renderer)
+
+For each renderer (`triangle.rs`, `forward.rs`, `deferred.rs`, `deferred_with_camera_controls.rs`):
+
+- [ ] Update imports to include new types
+- [ ] Change `AppRenderer` implementation to use new trait
+- [ ] Update `init()` to take `RenderContext`
+  - [ ] Extract device from `context.device`
+  - [ ] Access mesh cache via `context.state.mesh_cache`
+  - [ ] Load meshes with mutable access
+  - [ ] Get mesh data with immutable access
+- [ ] Update `render()` to take `RenderContext`
+  - [ ] Access device/queue via context
+  - [ ] Access mesh cache via context
+  - [ ] Access camera via `context.state.camera`
+- [ ] Update `resize()` to take `RenderContext`
+- [ ] Update `input()` to take `RenderContext` (if implemented)
+- [ ] Update any direct GraphicsContext access
+- [ ] Test compilation
+
+---
+
+## Risk Assessment
+
+### High Risk Items
+
+| Risk | Probability | Impact | Mitigation |
+|------|-------------|--------|------------|
+| Breaking existing functionality | Medium | High | Comprehensive testing, incremental migration |
+| Performance regression | Low | Medium | Performance testing before/after |
+| Memory leaks with Arc | Low | Medium | Careful ownership management, leak detection |
+| Thread safety issues | Low | High | Use Mutex for surface, document thread safety |
+
+### Medium Risk Items
+
+| Risk | Probability | Impact | Mitigation |
+|------|-------------|--------|------------|
+| Compiler errors during migration | High | Medium | Incremental changes, frequent compilation |
+| Lifetime issues with RenderContext | Medium | Medium | Careful lifetime annotation, compiler guidance |
+| Backward compatibility issues | Medium | Medium | Deprecation warnings, clear migration path |
+
+### Low Risk Items
+
+| Risk | Probability | Impact | Mitigation |
+|------|-------------|--------|------------|
+| Documentation outdated | High | Low | Update docs in final phase |
+| Example code broken | Medium | Low | Update examples with new patterns |
+
+---
+
+## Rollback Plan
+
+If the refactoring causes significant issues, we can roll back:
+
+1. **Partial Rollback**: Revert individual phases if issues are isolated
+2. **Full Rollback**: Revert all changes and restore original architecture
+
+### Rollback Steps
+
+1. Ensure all changes are committed with clear messages
+2. Tag the repository before starting: `git tag pre-refactor-radical-separation`
+3. Each phase should be in its own branch
+4. To rollback: `git checkout pre-refactor-radical-separation`
+
+---
+
+## Success Criteria
+
+### Must Have
+- [ ] All existing functionality works correctly
+- [ ] All tests pass
+- [ ] All binaries compile and run
+- [ ] No `RefCell` usage in MeshCache
+- [ ] Clear separation between GraphicsDevice and AppState
+- [ ] RenderContext provides all necessary access
+
+### Should Have
+- [ ] Performance equal to or better than before
+- [ ] Clean compilation with no warnings
+- [ ] Comprehensive documentation
+- [ ] All examples updated
+
+### Nice to Have
+- [ ] New unit tests for all new types
+- [ ] Integration tests for multi-renderer scenarios
+- [ ] Performance benchmarks showing improvement
+- [ ] Migration guide for external users
+
+---
+
+## Timeline
+
+### Optimistic (2-3 weeks)
+- Phase 1: 3 days
+- Phase 2: 2 days
+- Phase 3: 3 days
+- Phase 4: 7 days (parallel)
+- Phase 5: 5 days
+- Phase 6: 3 days
+- **Total: ~23 days**
+
+### Realistic (3-4 weeks)
+- Phase 1: 5 days
+- Phase 2: 3 days
+- Phase 3: 5 days
+- Phase 4: 10 days (parallel)
+- Phase 5: 7 days
+- Phase 6: 5 days
+- **Total: ~35 days**
+
+### Conservative (4-5 weeks)
+- Phase 1: 7 days
+- Phase 2: 5 days
+- Phase 3: 7 days
+- Phase 4: 14 days (parallel)
+- Phase 5: 10 days
+- Phase 6: 7 days
+- **Total: ~50 days**
+
+---
+
+## Team Assignments
+
+| Phase | Primary Owner | Secondary Support | Reviewers |
+|-------|---------------|-------------------|-----------|
+| Phase 0 | Architecture Team | All | Core Team |
+| Phase 1 | Core Team | Framework Team | Architecture Team |
+| Phase 2 | Mesh Team | Core Team | Framework Team |
+| Phase 3 | Framework Team | Core Team | Architecture Team |
+| Phase 4 | Renderer Team | Framework Team | Core Team |
+| Phase 5 | QA Team | All | Core Team |
+| Phase 6 | Documentation Team | Core Team | All |
+
+---
+
+## Communication Plan
+
+### Daily Standups
+- 15-minute daily standup during active development
+- Focus on blockers and progress
+
+### Weekly Reviews
+- Friday afternoon review of progress
+- Demo working code when possible
+- Adjust timeline as needed
+
+### Key Milestones
+- **Phase 1 Complete**: Review new type definitions
+- **Phase 3 Complete**: Review framework changes
+- **Phase 4 Complete**: All renderers migrated
+- **Phase 5 Complete**: All tests passing
+- **Project Complete**: Final review and sign-off
+
+---
+
+## Tracking
+
+### Progress Tracking
+Use GitHub Projects or a similar tool to track individual tasks.
+
+### Metrics
+- Lines of code changed
+- Number of files modified
+- Test coverage percentage
+- Compilation success rate
+- Performance metrics
+
+### Checkpoints
+
+| Checkpoint | Date | Status |
+|------------|------|--------|
+| Phase 0 Complete | [Date] | ✅ COMPLETED |
+| Phase 1 Complete | [Date] | ⬜ NOT STARTED |
+| Phase 2 Complete | [Date] | ⬜ NOT STARTED |
+| Phase 3 Complete | [Date] | ⬜ NOT STARTED |
+| Phase 4 Complete | [Date] | ⬜ NOT STARTED |
+| Phase 5 Complete | [Date] | ⬜ NOT STARTED |
+| Phase 6 Complete | [Date] | ⬜ NOT STARTED |
+| Project Complete | [Date] | ⬜ NOT STARTED |
+
+---
+
+## Appendix A: File Changes Summary
+
+### New Files
+- `src/device.rs` - GraphicsDevice implementation
+- `src/state.rs` - AppState implementation
+- `tests/device_test.rs` - GraphicsDevice tests
+- `tests/state_test.rs` - AppState tests
+- `tests/context_test.rs` - RenderContext tests
+- `ARCHITECTURE.md` - Architecture documentation
+
+### Modified Files
+- `src/lib.rs` - Module exports
+- `src/context.rs` - Add RenderContext
+- `src/mesh.rs` - Remove RefCell from MeshCache
+- `src/app.rs` - Update AppRenderer trait and Application
+- `src/bin/triangle.rs` - Migrate to new architecture
+- `src/bin/forward.rs` - Migrate to new architecture
+- `src/bin/deferred.rs` - Migrate to new architecture
+- `src/bin/deferred_with_camera_controls.rs` - Migrate to new architecture
+- `tests/mesh_test.rs` - Update tests
+
+### Deleted Files
+- None (backward compatibility maintained until Phase 6)
+
+---
+
+## Appendix B: Glossary
+
+| Term | Definition |
+|------|------------|
+| GraphicsDevice | Immutable GPU infrastructure (device, queue, surface) |
+| AppState | Mutable application state (meshes, camera, scene) |
+| RenderContext | Temporary borrow of GraphicsDevice and AppState for rendering |
+| SurfaceConfig | Configuration for the wgpu surface with thread-safe access |
+| MeshCache | Cache for mesh assets and GPU resources (now without RefCell) |
+
+---
+
+## Appendix C: References
+
+- [Original Mesh Resource Refactor Summary](zed:///agent/thread/f2e3226f-9bde-4e93-87c6-72aa254302df?name=Mesh+Resource+Refactor+-+Complete+Summary)
+- [Rust Borrow Checker Documentation](https://doc.rust-lang.org/book/ch04-02-references-and-borrowing.html)
+- [wgpu Documentation](https://docs.rs/wgpu/latest/wgpu/)
+- [winit Documentation](https://docs.rs/winit/latest/winit/)
+
+---
+
+*Last Updated: 2026-08-26*  
+*Version: 1.0*  
+*Status: Draft*
