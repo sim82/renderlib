@@ -1,13 +1,11 @@
 //! Deferred rendering module.
 //!
-//! Provides G-buffer management for deferred shading pipelines.
-//! A G-buffer stores geometry data (position, normal, albedo) for later lighting computation.
+//! Provides G-buffer management for deferred shading. A G-buffer stores geometry
+//! data (position, normal, albedo) in separate textures for later lighting computation.
 
-/// G-buffer texture format for deferred rendering.
-/// Each texture stores one component of the deferred data:
-/// - Position: world space position (RGB, A unused)
-/// - Normal: world space normal (RGB, A unused)
-/// - Albedo: surface color (RGB, A unused)
+/// G-buffer for deferred rendering.
+///
+/// Contains three textures (position, normal, albedo) and a sampler for lighting pass access.
 #[derive(Debug)]
 pub struct GBuffer {
     pub bind_group_layout: wgpu::BindGroupLayout,
@@ -23,7 +21,7 @@ pub struct GBuffer {
 }
 
 impl GBuffer {
-    /// Create a new G-buffer with the given dimensions.
+    /// Creates a new G-buffer with the given dimensions.
     pub fn new(device: &wgpu::Device, width: u32, height: u32, label_prefix: Option<&str>) -> Self {
         let texture_format = wgpu::TextureFormat::Rgba16Float;
         let texture_usage = wgpu::TextureUsages::TEXTURE_BINDING

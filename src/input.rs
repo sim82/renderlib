@@ -1,6 +1,7 @@
-//! Input handling module for keyboard and mouse input.
+//! Input handling module.
 //!
-//! Provides input state tracking for frame-rate independent movement and controls.
+//! Provides input state tracking for keyboard and mouse, enabling frame-rate
+//! independent movement and camera controls.
 
 use std::collections::HashSet;
 use winit::dpi::PhysicalPosition;
@@ -10,9 +11,9 @@ use winit::keyboard::Key;
 /// Mouse input mode for camera control.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MouseMode {
-    /// Normal mode: mouse look is only enabled while Shift is held down.
+    /// Normal mode - mouse look only enabled while Shift is held
     Normal,
-    /// Grabbed mode: mouse look is constantly enabled.
+    /// Grabbed mode - mouse look always enabled
     Grabbed,
 }
 
@@ -25,29 +26,28 @@ impl Default for MouseMode {
 /// Mouse movement delta for a frame.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct MouseDelta {
-    /// Horizontal mouse movement (pixels).
+    /// Horizontal movement in pixels
     pub x: f32,
-    /// Vertical mouse movement (pixels).
+    /// Vertical movement in pixels
     pub y: f32,
 }
 
 impl MouseDelta {
-    /// Creates a new MouseDelta with zero movement.
+    /// Creates a new `MouseDelta` with zero movement.
     pub fn new() -> Self {
         Self { x: 0.0, y: 0.0 }
     }
 
-    /// Creates a new MouseDelta with the given values.
+    /// Creates a new `MouseDelta` with the given values.
     pub fn new_with(x: f32, y: f32) -> Self {
         Self { x, y }
     }
 }
 
-/// Tracks the state of keyboard keys for frame-rate independent input handling.
+/// Input controller for tracking keyboard and mouse state.
 ///
-/// This controller maintains a set of currently pressed keys and allows
-/// querying their state during the render loop. This enables smooth,
-/// frame-rate independent movement that doesn't depend on key repeat rates.
+/// Maintains a set of currently pressed keys and mouse movement, enabling
+/// smooth, frame-rate independent input handling.
 ///
 /// # Example
 ///

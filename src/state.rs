@@ -1,37 +1,43 @@
-//! Application state module - manages mutable application data.
+//! Application state module.
 //!
-//! This module provides the mutable application state that changes during runtime.
-//! Unlike the GPU infrastructure (GraphicsDevice), this represents the "scene"
-//! and "resources" layer that can be modified as the application runs.
+//! This module provides the [`AppState`] struct which contains all mutable application
+//! data that changes during runtime, such as the mesh cache, camera, input state,
+//! and timing information.
+//!
+//! # Main Types
+//!
+//! - [`AppState`] - Main application state container
+//! - [`TimeState`] - Timing information
+//! - [`InputState`] - Input state
 
 use crate::camera::Camera;
 use crate::mesh::{MeshCache, MeshHandle};
 
-/// Input state for tracking keyboard, mouse, and other input devices.
+/// Input state tracking keyboard, mouse, and other input devices.
 #[derive(Debug, Default)]
 pub struct InputState {
     /// Currently pressed keys
     pub pressed_keys: Vec<winit::keyboard::Key>,
-    /// Mouse position
+    /// Mouse position (x, y) in window coordinates
     pub mouse_position: Option<(f64, f64)>,
-    /// Mouse buttons pressed
+    /// Mouse buttons currently pressed
     pub mouse_buttons: Vec<u16>,
-    /// Scroll delta
+    /// Scroll wheel delta (x, y)
     pub scroll_delta: (f64, f64),
 }
 
 impl InputState {
-    /// Create a new input state.
+    /// Creates a new input state.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Update the mouse position.
+    /// Updates the mouse position.
     pub fn set_mouse_position(&mut self, x: f64, y: f64) {
         self.mouse_position = Some((x, y));
     }
 
-    /// Clear the scroll delta (should be called after processing).
+    /// Clears the scroll delta.
     pub fn clear_scroll(&mut self) {
         self.scroll_delta = (0.0, 0.0);
     }
@@ -83,41 +89,41 @@ impl TimeState {
     }
 }
 
-/// Mutable application state that changes during runtime.
+/// Mutable application state.
 ///
-/// This struct contains all the mutable data for the application, including
-/// the mesh cache, camera, scene information, and input state.
+/// Contains all mutable data for the application, including the mesh cache,
+/// camera, input state, and timing information.
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use renderlib::state::AppState;
-/// use renderlib::device::GraphicsDevice;
 ///
+/// # fn example(device: &wgpu::Device) {
 /// // Create application state
-/// let device = GraphicsDevice::new(...).await;
-/// let mut state = AppState::new(device.wgpu_device());
+/// let mut state = AppState::new(device);
 ///
 /// // Load a mesh
-/// let mesh_source = MeshSource::Path("mesh.gltf".to_string());
-/// let mesh_handle = state.mesh_cache.load(&mesh_source).unwrap();
+/// use renderlib::mesh::MeshSource;
+/// let mesh_handle = state.mesh_cache.load_mut(&MeshSource::Path("mesh.gltf".to_string())).unwrap();
+/// # }
 /// ```
 #[derive(Debug)]
 pub struct AppState {
-    /// Central cache for managing mesh assets and GPU resources.
+    /// Central cache for managing mesh assets and GPU resources
     pub mesh_cache: MeshCache,
-    /// Main camera for the scene.
+    /// Main camera for the scene
     pub camera: Camera,
-    /// Input state for tracking user input.
+    /// Input state for tracking user input
     pub input: InputState,
-    /// Timing information.
+    /// Timing information
     pub time: TimeState,
-    /// Currently active mesh handle (for debugging/demonstration).
+    /// Currently active mesh handle
     pub active_mesh: Option<MeshHandle>,
 }
 
 impl AppState {
-    /// Create a new application state with the given wgpu device.
+    /// Creates a new application state with the given wgpu device.
     ///
     /// # Arguments
     ///
@@ -125,7 +131,7 @@ impl AppState {
     ///
     /// # Returns
     ///
-    /// A new `AppState` instance ready for use.
+    /// Returns a new [`AppState`] instance ready for use.
     pub fn new(device: &wgpu::Device) -> Self {
         Self {
             mesh_cache: MeshCache::new(device),
@@ -146,17 +152,19 @@ impl AppState {
         self.active_mesh = Some(handle);
     }
 
-    /// Clear the active mesh handle.
+    /// Clears the active mesh handle.
     pub fn clear_active_mesh(&mut self) {
         self.active_mesh = None;
     }
 
-    /// Get the active mesh handle.
+    /// Returns the active mesh handle, if any.
     pub fn get_active_mesh(&self) -> Option<MeshHandle> {
         self.active_mesh
     }
 
-    /// Load a mesh and set it as active.
+    /// Loads a mesh and sets it as active.
+    ///
+    /// Convenience method that loads a mesh and automatically sets it as the active mesh.
     pub fn load_and_set_active(
         &mut self,
         source: &crate::mesh::MeshSource,

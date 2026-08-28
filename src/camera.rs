@@ -1,33 +1,32 @@
 //! Camera module for 3D scene viewing.
 //!
 //! Provides camera abstractions for creating view and projection matrices,
-//! with support for both static cameras and simple orbit controls.
+//! with support for orbit controls and lighting.
 
 use cgmath::{Deg, InnerSpace, Matrix4, Point3, Rad, SquareMatrix, Transform as _, Vector3};
 
 /// Maximum number of lights supported by the rendering system.
-/// This is limited by uniform buffer size constraints in WebGPU/WGPU.
 pub const MAX_LIGHTS: usize = 32;
 
 /// Default camera configuration values.
 pub mod defaults {
     use cgmath::{Point3, Vector3};
 
-    /// Default field of view in degrees.
+    /// Default field of view in degrees
     pub const FOV: f32 = 45.0;
-    /// Default near clipping plane distance.
+    /// Default near clipping plane distance
     pub const NEAR: f32 = 0.1;
-    /// Default far clipping plane distance.
+    /// Default far clipping plane distance
     pub const FAR: f32 = 100.0;
-    /// Default camera position (looking at origin from z=5).
+    /// Default camera position
     pub fn position() -> Point3<f32> {
         Point3::new(0.0, 0.0, 5.0)
     }
-    /// Default camera target (origin).
+    /// Default camera target
     pub fn target() -> Point3<f32> {
         Point3::new(0.0, 0.0, 0.0)
     }
-    /// Default up vector (Y-axis).
+    /// Default up vector
     pub fn up() -> Vector3<f32> {
         Vector3::new(0.0, 1.0, 0.0)
     }
@@ -35,10 +34,7 @@ pub mod defaults {
 
 /// A 3D camera that defines a view into the scene.
 ///
-/// The camera uses a standard 3D coordinate system:
-/// - Position: where the camera is located
-/// - Target: what the camera is looking at
-/// - Up: which direction is "up"
+/// Uses a standard 3D coordinate system with position, target, and up vector.
 ///
 /// # Example
 ///
@@ -511,7 +507,7 @@ impl Default for Light {
 
 impl Light {
     /// Creates a new light with the given position and color.
-    /// 
+    ///
     /// # Arguments
     /// * `position` - Light position in world space (x, y, z)
     /// * `color` - Light color as RGB values (r, g, b)
@@ -523,7 +519,7 @@ impl Light {
     }
 
     /// Creates a new light with the given position, color, and intensity.
-    /// 
+    ///
     /// # Arguments
     /// * `position` - Light position in world space (x, y, z)
     /// * `color` - Light color as RGB values (r, g, b)
@@ -531,7 +527,12 @@ impl Light {
     pub fn with_intensity(position: [f32; 3], color: [f32; 3], intensity: f32) -> Self {
         Self {
             position: [position[0], position[1], position[2], 0.0],
-            color: [color[0] * intensity, color[1] * intensity, color[2] * intensity, 1.0],
+            color: [
+                color[0] * intensity,
+                color[1] * intensity,
+                color[2] * intensity,
+                1.0,
+            ],
         }
     }
 }
@@ -582,14 +583,14 @@ impl LightingUniform {
     }
 
     /// Creates a lighting uniform from camera and an array of lights.
-    /// 
+    ///
     /// # Arguments
     /// * `camera` - The camera
     /// * `lights` - Slice of Light structs to include (up to MAX_LIGHTS)
     pub fn new_with_lights(camera: &Camera, lights: &[Light]) -> Self {
         let mut uniform = Self::default();
         uniform.view_position = [camera.position.x, camera.position.y, camera.position.z, 0.0];
-        
+
         let count = lights.len().min(MAX_LIGHTS);
         uniform.num_lights = count as u32;
         for (i, &light) in lights.iter().take(count).enumerate() {
@@ -600,7 +601,7 @@ impl LightingUniform {
 
     /// Creates a lighting uniform with multiple light positions (for convenience).
     /// All lights will have white color (1.0, 1.0, 1.0).
-    /// 
+    ///
     /// # Arguments
     /// * `camera` - The camera
     /// * `light_positions` - Array of light positions (x, y, z)

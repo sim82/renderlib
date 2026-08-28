@@ -1,61 +1,51 @@
 //! Player module for first-person camera control.
 //!
-//! Provides player state management for frame-rate independent movement
-//! and camera control in 3D applications.
+//! Provides player state management for frame-rate independent movement and
+//! camera control in 3D applications.
 
 use cgmath::{InnerSpace, Matrix3, Point3, Rad, Vector3};
 
 use crate::camera::Camera;
 use crate::input::{InputController, MouseDelta};
 
-/// Movement speed in units per second.
+/// Default movement speed in units per second.
 const DEFAULT_MOVE_SPEED: f32 = 2.5;
 
-/// Deceleration rate in units per second per second (how quickly velocity decreases when no input).
-/// Higher values mean faster deceleration.
+/// Default deceleration rate (higher = faster deceleration).
 const DEFAULT_DECELERATION: f32 = 10.0;
 
-/// Acceleration rate in units per second per second (how quickly velocity increases when input is applied).
-/// Higher values mean faster acceleration.
+/// Default acceleration rate (higher = faster acceleration).
 const DEFAULT_ACCELERATION: f32 = 20.0;
 
-/// Mouse look sensitivity (radians per pixel).
-/// Controls how much the camera rotates per pixel of mouse movement.
+/// Default mouse look sensitivity in radians per pixel.
 const DEFAULT_MOUSE_SENSITIVITY: f32 = 0.002;
 
-/// A self-contained representation of player input state for a single frame.
+/// Player input for a single frame.
 ///
-/// This struct captures the current input state (which movement keys are pressed
-/// and mouse movement) at a point in time, allowing it to be applied to a PlayerState.
-/// This design enables features like recording and replaying input, or applying
-/// the same input to multiple players.
+/// Captures movement direction flags and mouse delta for camera control.
 ///
 /// # Example
 ///
-/// ```ignore
-/// use renderlib::player::{PlayerState, PlayerInput};
+/// ```no_run
+/// use renderlib::player::{PlayerInput, MovementSettings};
 /// use renderlib::input::MouseDelta;
 ///
-/// // Create input state for this frame
 /// let input = PlayerInput::new()
 ///     .with_move_forward(true)
 ///     .with_move_right(true)
 ///     .with_mouse_delta(MouseDelta::new_with(10.0, 5.0));
-///
-/// // Apply to player
-/// player.apply_input(&input, delta_time);
 /// ```
 #[derive(Debug, Clone, Default)]
 pub struct PlayerInput {
-    /// Whether the player should move forward.
+    /// Whether to move forward
     pub move_forward: bool,
-    /// Whether the player should move backward.
+    /// Whether to move backward
     pub move_backward: bool,
-    /// Whether the player should move left.
+    /// Whether to move left
     pub move_left: bool,
-    /// Whether the player should move right.
+    /// Whether to move right
     pub move_right: bool,
-    /// Mouse movement delta for this frame (pixels).
+    /// Mouse movement delta for this frame
     pub mouse_delta: MouseDelta,
 }
 

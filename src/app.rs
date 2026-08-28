@@ -1,7 +1,53 @@
 //! Application framework module.
 //!
-//! This module provides a clean separation between GPU infrastructure and application state,
-//! using RenderContext for accessing both immutable and mutable resources.
+//! This module provides the main application framework for renderlib. It implements
+//! the winit [`ApplicationHandler`] trait and manages the application lifecycle,
+//! including window creation, GPU initialization, and renderer integration.
+//!
+//! # Main Types
+//!
+//! - [`Application<R>`] - The main application struct that implements [`ApplicationHandler`]
+//! - [`AppRenderer`] - Trait that all renderers must implement
+//!
+//! # Usage
+//!
+//! Create a renderer struct and implement [`AppRenderer`]:
+//!
+//! ```no_run
+//! use renderlib::app::{AppRenderer, Application};
+//! use renderlib::context::RenderContext;
+//!
+//! struct MyRenderer {
+//!     render_pipeline: wgpu::RenderPipeline,
+//! }
+//!
+//! impl AppRenderer for MyRenderer {
+//!     async fn init(mut context: RenderContext<'_>) -> Self {
+//!         let device = context.wgpu_device();
+//!         // Create your render pipeline and other resources
+//!         # panic!("example not complete");
+//!     }
+//!
+//!     fn render(&mut self, mut context: RenderContext<'_>) {
+//!         let texture_view = context.get_texture_view().unwrap();
+//!         // Render your scene
+//!     }
+//!
+//!     fn resize(&mut self, _context: RenderContext<'_>, _size: winit::dpi::PhysicalSize<u32>) {
+//!         // Recreate size-dependent resources
+//!     }
+//!
+//!     fn input(&mut self, _context: RenderContext<'_>, _event: &winit::event::WindowEvent) {
+//!         // Handle input events
+//!     }
+//! }
+//!
+//! fn main() {
+//!     let event_loop = winit::event_loop::EventLoop::new().unwrap();
+//!     let mut app = Application::<MyRenderer>::new();
+//!     event_loop.run_app(&mut app).unwrap();
+//! }
+//! ```
 
 use std::sync::Arc;
 
@@ -19,29 +65,47 @@ use crate::state::AppState;
 
 /// Trait for application-specific rendering.
 ///
-/// This trait provides a clean interface for renderers that use the
-/// `RenderContext` for accessing both GPU infrastructure and application state.
+/// Implement this trait to create a custom renderer. The [`Application`] struct
+/// will call these methods at appropriate times during the application lifecycle.
+///
+/// All methods receive a [`RenderContext`] which provides access to both
+/// GPU infrastructure (via [`GraphicsDevice`]) and application state (via [`AppState`]).
 pub trait AppRenderer: Sized {
     /// Initialize rendering resources asynchronously.
+    ///
+    /// Called once when the application starts, after the window and GPU resources
+    /// have been initialized. Use this to create your render pipeline, buffers, textures,
+    /// and other GPU resources.
     fn init(context: RenderContext<'_>) -> impl std::future::Future<Output = Self>;
 
     /// Called when the window needs to be redrawn.
+    ///
+    /// This is the main rendering method, called for each frame. Use the provided
+    /// [`RenderContext`] to access the GPU device, queue, current texture view, and
+    /// application state.
     fn render(&mut self, context: RenderContext<'_>);
 
     /// Called on window resize (after the surface has been reconfigured).
+    ///
+    /// Recreate any size-dependent resources here, such as depth textures,
+    /// render targets, or camera projection matrices.
     fn resize(&mut self, context: RenderContext<'_>, new_size: winit::dpi::PhysicalSize<u32>);
 
-    /// Called when an input event occurs (e.g., key press).
-    /// Default implementation does nothing.
+    /// Called when an input event occurs (e.g., key press, mouse movement).
+    ///
+    /// Override this to handle user input. The default implementation does nothing.
     fn input(&mut self, _context: RenderContext<'_>, _event: &WindowEvent) {}
 }
 
-/// Application struct that uses the improved architecture with
-/// separate GPU infrastructure and application state.
+/// Main application struct.
+///
+/// This struct implements winit's [`ApplicationHandler`] trait and manages the
+/// application lifecycle. It holds the GPU infrastructure, application state,
+/// and renderer instance.
 pub struct Application<R: AppRenderer> {
-    /// GPU infrastructure (immutable)
+    /// GPU infrastructure (device, queue, surface)
     device: Option<GraphicsDevice>,
-    /// Application state (mutable)
+    /// Application state (mesh cache, camera, input, time)
     state: Option<AppState>,
     /// Renderer instance
     renderer: Option<R>,
@@ -61,6 +125,9 @@ impl<R: AppRenderer + 'static> Application<R> {
     }
 
     /// Get a render context for the current frame.
+    ///
+    /// Creates a [`RenderContext`] with references to the GPU device, application state,
+    /// and the current surface texture view.
     pub fn create_render_context(
         &mut self,
         surface_texture: Option<wgpu::SurfaceTexture>,

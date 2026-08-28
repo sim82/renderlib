@@ -1,8 +1,13 @@
-//! Graphics device module - manages wgpu device, queue, and surface infrastructure.
+//! GPU infrastructure module.
 //!
-//! This module provides the immutable GPU infrastructure that can be shared
-//! across the application. Unlike the application state, this represents
-//! the "hardware" layer that doesn't change during runtime.
+//! This module provides the [`GraphicsDevice`] and [`SurfaceConfig`] types for managing
+//! the immutable GPU infrastructure. These types represent the "hardware" layer that
+//! doesn't change during runtime and can be safely shared across threads.
+//!
+//! # Main Types
+//!
+//! - [`GraphicsDevice`] - Main GPU infrastructure container
+//! - [`SurfaceConfig`] - Surface configuration with thread-safe access
 
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -10,15 +15,15 @@ use std::sync::Mutex;
 use winit::event_loop::OwnedDisplayHandle;
 use winit::window::Window;
 
-/// Configuration for the wgpu surface.
+/// Surface configuration.
 ///
-/// This provides thread-safe access to the surface configuration
-/// and allows for surface reconfiguration when the window is resized.
+/// Provides thread-safe access to the wgpu surface and allows for
+/// surface reconfiguration when the window is resized.
 #[derive(Debug)]
 pub struct SurfaceConfig {
-    /// The wgpu instance (needed for surface recreation)
+    /// The wgpu instance
     pub instance: wgpu::Instance,
-    /// The window (needed for surface recreation)
+    /// The window
     pub window: Arc<Window>,
     /// The wgpu surface, protected by a mutex for thread safety
     pub surface: Arc<Mutex<wgpu::Surface<'static>>>,
@@ -29,7 +34,7 @@ pub struct SurfaceConfig {
 }
 
 impl SurfaceConfig {
-    /// Create a new surface configuration.
+    /// Creates a new surface configuration.
     pub fn new(
         instance: wgpu::Instance,
         window: Arc<Window>,
@@ -46,15 +51,15 @@ impl SurfaceConfig {
         }
     }
 
-    /// Lock the surface for exclusive access.
+    /// Locks the surface for exclusive access.
     ///
-    /// This is useful when you need to perform operations that require
-    /// mutable access to the surface, such as getting the current texture.
+    /// Use this when you need to perform operations that require mutable access
+    /// to the surface, such as surface configuration.
     pub fn lock_surface(&self) -> std::sync::MutexGuard<'_, wgpu::Surface<'static>> {
         self.surface.lock().unwrap()
     }
 
-    /// Configure the surface with the current settings.
+    /// Configures the surface with the current settings.
     ///
     /// This should be called after creating the surface or when the window is resized.
     pub fn configure(&self, device: &wgpu::Device) {
@@ -144,23 +149,25 @@ impl SurfaceConfig {
     }
 }
 
-/// Immutable GPU infrastructure that can be shared across the application.
+/// Immutable GPU infrastructure.
 ///
-/// This struct represents the "hardware" layer of the graphics system.
-/// It contains the wgpu device, queue, instance, and surface configuration,
-/// all of which are immutable after creation and can be safely shared between
-/// different parts of the application.
+/// This struct represents the "hardware" layer of the graphics system, containing
+/// the wgpu instance, device, queue, surface configuration, and window.
+/// All fields are immutable after creation and can be safely shared across threads.
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use renderlib::device::GraphicsDevice;
+/// use std::sync::Arc;
 ///
+/// # async fn example() {
 /// // Create a new graphics device
 /// let device = GraphicsDevice::new(display_handle, window).await;
 ///
 /// // Share it across threads using Arc
 /// let device_arc = Arc::new(device);
+/// # }
 /// ```
 #[derive(Debug)]
 pub struct GraphicsDevice {
@@ -177,10 +184,10 @@ pub struct GraphicsDevice {
 }
 
 impl GraphicsDevice {
-    /// Create a new graphics device from a window and display handle.
+    /// Creates a new graphics device from a window and display handle.
     ///
-    /// This initializes the wgpu instance, requests an adapter, and creates
-    /// the device and queue. It also sets up the surface for the window.
+    /// This initializes the wgpu instance, requests an adapter, creates the device
+    /// and queue (wrapped in [`Arc`] for thread sharing), and sets up the surface.
     ///
     /// # Arguments
     ///
@@ -189,7 +196,7 @@ impl GraphicsDevice {
     ///
     /// # Returns
     ///
-    /// A new `GraphicsDevice` instance ready for use.
+    /// A new [`GraphicsDevice`] instance ready for use.
     pub async fn new(display: OwnedDisplayHandle, window: Arc<Window>) -> Self {
         // Create wgpu instance with display handle
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_with_display_handle(
@@ -240,41 +247,37 @@ impl GraphicsDevice {
         }
     }
 
-    /// Get a reference to the wgpu device.
-    ///
-    /// This is a convenience method for accessing the underlying wgpu device.
+    /// Returns a reference to the underlying wgpu device.
     pub fn wgpu_device(&self) -> &wgpu::Device {
         &self.device
     }
 
-    /// Get a reference to the wgpu queue.
-    ///
-    /// This is a convenience method for accessing the underlying wgpu queue.
+    /// Returns a reference to the underlying wgpu queue.
     pub fn wgpu_queue(&self) -> &wgpu::Queue {
         &self.queue
     }
 
-    /// Get the current window size.
+    /// Returns the current window size in physical pixels.
     pub fn size(&self) -> winit::dpi::PhysicalSize<u32> {
         self.surface_config.size
     }
 
-    /// Resize the surface to the new size.
+    /// Resizes the surface to the new size.
     pub fn resize(&self, new_size: winit::dpi::PhysicalSize<u32>) {
         self.surface_config.resize(new_size, &self.device);
     }
 
-    /// Request a redraw of the window.
+    /// Requests a redraw of the window.
     pub fn request_redraw(&self) {
         self.window.request_redraw();
     }
 
-    /// Notify the window before presenting.
+    /// Notifies the window before presenting.
     pub fn pre_present_notify(&self) {
         self.window.pre_present_notify();
     }
 
-    /// Get the surface format.
+    /// Returns the surface texture format.
     pub fn surface_format(&self) -> wgpu::TextureFormat {
         self.surface_config.format
     }

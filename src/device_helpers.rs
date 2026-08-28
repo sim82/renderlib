@@ -1,13 +1,12 @@
-//! Generic helper functions for wgpu device operations.
+//! Device helper functions for common wgpu operations.
 //!
-//! These helpers provide ergonomic wrappers around common wgpu operations,
-//! reducing boilerplate while maintaining full generality.
+//! Provides ergonomic wrappers around common wgpu operations to reduce boilerplate.
 
 use std::path::Path;
 
 use wgpu::util::DeviceExt;
 
-/// Generic helper to create a buffer from any Pod type
+/// Creates a buffer initialized with data.
 pub fn create_buffer<T: bytemuck::Pod>(
     device: &wgpu::Device,
     label: Option<&str>,
@@ -21,7 +20,7 @@ pub fn create_buffer<T: bytemuck::Pod>(
     })
 }
 
-/// Generic helper to create a buffer from a slice of Pod types
+/// Creates a buffer initialized with slice data.
 pub fn create_buffer_from_slice<T: bytemuck::Pod>(
     device: &wgpu::Device,
     label: Option<&str>,
@@ -35,7 +34,7 @@ pub fn create_buffer_from_slice<T: bytemuck::Pod>(
     })
 }
 
-/// Load shader source code from a file.
+/// Loads shader source code from a file.
 ///
 /// # Arguments
 ///
@@ -43,7 +42,7 @@ pub fn create_buffer_from_slice<T: bytemuck::Pod>(
 ///
 /// # Returns
 ///
-/// The shader source code as a string, or an error if the file cannot be read or is empty.
+/// The shader source code as a string, or an error if the file cannot be read.
 pub fn load_shader_source<P: AsRef<Path>>(path: P) -> Result<String, String> {
     let path_str = path.as_ref().display().to_string();
     let source = std::fs::read_to_string(&path)

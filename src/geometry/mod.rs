@@ -1,7 +1,6 @@
-//! Geometry module - provides common vertex types and mesh data structures.
+//! Geometry module providing common vertex types.
 //!
-//! This module contains pre-defined vertex types with standard layouts for common
-//! rendering scenarios, reducing boilerplate in application code.
+//! Contains pre-defined vertex types with standard layouts for common rendering scenarios.
 
 use wgpu::VertexBufferLayout;
 
@@ -9,8 +8,6 @@ use wgpu::VertexBufferLayout;
 pub mod primitives;
 
 /// Vertex with position and color attributes.
-///
-/// Use case: Simple 2D/3D rendering without lighting (colored geometry).
 ///
 /// - `position` at shader location 0
 /// - `color` at shader location 1
@@ -45,9 +42,9 @@ impl PosColorVertex {
 
 /// Vertex with position, color, and normal attributes.
 ///
-/// Use case: 3D rendering with lighting (per-vertex normals for diffuse lighting).
-///
 /// - `position` at shader location 0
+/// - `color` at shader location 1
+/// - `normal` at shader location 2
 /// - `color` at shader location 1
 /// - `normal` at shader location 2
 #[repr(C)]

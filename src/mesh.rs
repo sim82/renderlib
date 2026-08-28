@@ -1,22 +1,8 @@
 //! Mesh loading and management module.
 //!
-//! Provides functionality for loading 3D meshes from various formats,
-//! particularly GLTF/GLB files, and managing their vertex and index buffers.
-//!
-//! # Architecture
-//!
-//! This module uses a decoupled design to separate CPU-side mesh data
-//! (`MeshAsset`) from GPU-side resources (`MeshResource`). This allows:
-//! - CPU-side operations (e.g., physics, culling) without GPU overhead.
-//! - Thread-safe loading (CPU data can be loaded in background threads).
-//! - Memory efficiency (avoid redundant CPU data for GPU-only use cases).
-//!
-//! # Key Types
-//!
-//! - [`MeshAsset`]: CPU-side mesh data (vertices, indices, metadata).
-//! - [`MeshResource`]: GPU-side buffers for rendering.
-//! - [`MeshHandle`]: Opaque identifier for cached meshes.
-//! - [`MeshCache`]: Central cache for managing mesh assets and resources.
+//! Provides functionality for loading 3D meshes from GLTF/GLB files and managing
+//! their vertex and index buffers. Uses a decoupled design separating CPU-side
+//! mesh data from GPU-side resources.
 
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -30,7 +16,7 @@ use wgpu::VertexBufferLayout;
 use crate::device_helpers::create_buffer_from_slice;
 use crate::geometry::PosColorNormalVertex;
 
-/// Bounding box for a mesh, used for calculating scale and center.
+/// Bounding box for a mesh.
 #[derive(Debug, Clone, Copy)]
 pub struct BoundingBox {
     pub min: Vector3<f32>,
@@ -38,12 +24,12 @@ pub struct BoundingBox {
 }
 
 impl BoundingBox {
-    /// Create a new bounding box from min and max points.
+    /// Creates a new bounding box from min and max points.
     pub fn new(min: Vector3<f32>, max: Vector3<f32>) -> Self {
         Self { min, max }
     }
 
-    /// Calculate the scale factor to fit the mesh in a unit size.
+    /// Returns the scale factor to fit the mesh in a unit size.
     pub fn scale_factor(&self) -> f32 {
         let width = self.max.x - self.min.x;
         let height = self.max.y - self.min.y;
