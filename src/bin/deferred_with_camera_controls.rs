@@ -13,15 +13,13 @@
 //! GPU infrastructure and application state, while maintaining the same
 //! input handling with PlayerState and InputController as the original.
 
-use std::time::Instant;
-
 use cgmath::{Matrix4, Rad, SquareMatrix, Vector3};
 use winit::event::WindowEvent;
 use winit::event_loop::EventLoop;
 use winit::keyboard::Key;
 
 use renderlib::app::{AppRenderer, Application};
-use renderlib::camera::{Camera, GeometryUniform, Light, LightingUniform};
+use renderlib::camera::{GeometryUniform, Light, LightingUniform};
 use renderlib::context::RenderContext;
 use renderlib::deferred::GBuffer;
 use renderlib::device_helpers::*;
@@ -77,13 +75,6 @@ pub struct DeferredRenderer {
     // Hot-reload state
     should_reload_geometry: bool,
     should_reload_lighting: bool,
-
-    // Timing
-    start_time: Instant,
-    last_frame_time: Instant,
-
-    // Camera
-    camera: Camera,
 
     // Player state for movement
     player: PlayerState,
@@ -217,14 +208,8 @@ impl AppRenderer for DeferredRenderer {
         let size = context.size();
         let aspect = size.width as f32 / size.height as f32;
 
-        // Use camera from app state as starting point
+        // Clone camera from app state first to avoid borrow conflicts
         let camera = context.state().camera.clone();
-
-        // Load shaders
-        let geometry_shader_src =
-            load_shader_source(GEOMETRY_SHADER_PATH).expect("Failed to load geometry shader");
-        let lighting_shader_src =
-            load_shader_source(LIGHTING_SHADER_PATH).expect("Failed to load lighting shader");
 
         // Load mesh using the new mesh cache via context state
         let mesh_source = MeshSource::Path(DEFAULT_MESH_PATH.to_string());
@@ -244,6 +229,14 @@ impl AppRenderer for DeferredRenderer {
             .get_both(mesh_handle)
             .expect("Failed to get mesh data");
 
+        // Load shaders
+        let geometry_shader_src =
+            load_shader_source(GEOMETRY_SHADER_PATH).expect("Failed to load geometry shader");
+        let lighting_shader_src =
+            load_shader_source(LIGHTING_SHADER_PATH).expect("Failed to load lighting shader");
+
+        let device = context.wgpu_device();
+
         let model_scale = mesh_asset.scale;
         let mesh_center = mesh_asset.center;
         let num_indices = mesh_resource.num_indices;
@@ -261,7 +254,6 @@ impl AppRenderer for DeferredRenderer {
             );
         }
 
-        let device = context.wgpu_device();
         // Create quad buffer for lighting pass
         let quad_vertex_buffer = create_buffer_from_slice(
             device,
@@ -378,9 +370,6 @@ impl AppRenderer for DeferredRenderer {
             mesh_center,
             should_reload_geometry: false,
             should_reload_lighting: false,
-            start_time: Instant::now(),
-            last_frame_time: Instant::now(),
-            camera,
             player: PlayerState::new(),
             input_controller: InputController::new(),
             lights,
@@ -389,26 +378,22 @@ impl AppRenderer for DeferredRenderer {
     }
 
     fn render(&mut self, mut context: RenderContext<'_>) {
-        // Calculate delta time for frame-rate independent movement
-        let current_time = Instant::now();
-        let delta_time = current_time
-            .duration_since(self.last_frame_time)
-            .as_secs_f32();
-        self.last_frame_time = current_time;
+        // Update time state and get delta time
+        context.state().time.update();
+        let delta_time = context.state().time.delta_time as f32;
 
-        // Create player input from input controller with mouse filtering
+        // Update camera from player input - do this first to avoid borrow conflicts
         let player_input = self.input_controller.get_player_input();
-
-        // Update player position based on input
         self.player.update(&player_input, delta_time);
+        self.player.apply_to_camera(&mut context.state().camera);
 
-        // Apply player position to camera
-        self.player.apply_to_camera(&mut self.camera);
+        // Get device reference after state operations
+        let device = context.wgpu_device();
 
         // Handle shader reload
         if self.should_reload_geometry {
             eprintln!("Reloading geometry shader...");
-            if let Err(e) = self.reload_geometry_shader(context.wgpu_device()) {
+            if let Err(e) = self.reload_geometry_shader(device) {
                 eprintln!("Geometry shader reload failed: {}", e);
             } else {
                 eprintln!("Geometry shader reloaded successfully!");
@@ -417,7 +402,7 @@ impl AppRenderer for DeferredRenderer {
 
         if self.should_reload_lighting {
             eprintln!("Reloading lighting shader...");
-            if let Err(e) = self.reload_lighting_shader(context.wgpu_device()) {
+            if let Err(e) = self.reload_lighting_shader(device) {
                 eprintln!("Lighting shader reload failed: {}", e);
             } else {
                 eprintln!("Lighting shader reloaded successfully!");
@@ -427,12 +412,11 @@ impl AppRenderer for DeferredRenderer {
         // Resize G-buffer and depth texture if needed
         let size = context.size();
         if self.gbuffer.width != size.width || self.gbuffer.height != size.height {
-            self.gbuffer
-                .resize(context.wgpu_device(), size.width, size.height);
+            self.gbuffer.resize(device, size.width, size.height);
 
             // Recreate depth texture with new size
             let (depth_texture, depth_texture_view) = create_depth_texture(
-                context.wgpu_device(),
+                device,
                 size.width,
                 size.height,
                 Some("GLTF Deferred Depth Texture"),
@@ -442,7 +426,7 @@ impl AppRenderer for DeferredRenderer {
         }
 
         // Calculate matrices
-        let elapsed = self.start_time.elapsed().as_secs_f32();
+        let elapsed = context.state().time.total_time as f32;
         let aspect = size.width as f32 / size.height as f32;
 
         // Create model matrix with translation, scaling, and rotation
@@ -453,19 +437,24 @@ impl AppRenderer for DeferredRenderer {
             * scale_matrix
             * translation;
 
-        // Update geometry uniform buffer
-        let geometry_uniform = GeometryUniform::new(&self.camera, model, aspect);
-        context.wgpu_queue().write_buffer(
+        // Clone camera from AppState first to avoid borrow conflicts
+        let camera = context.state().camera.clone();
+
+        // Get graphics device reference for queue
+        let graphics_device = context.device();
+        let queue = &graphics_device.queue;
+
+        // Create geometry uniform buffer
+        let geometry_uniform = GeometryUniform::new(&camera, model, aspect);
+        queue.write_buffer(
             &self.geometry_uniform_buffer,
             0,
             bytemuck::cast_slice(&[geometry_uniform]),
         );
 
-        let lighting_uniform = LightingUniform::new_with_lights(
-            &self.camera,
-            &self.lights[..self.num_lights as usize],
-        );
-        context.wgpu_queue().write_buffer(
+        let lighting_uniform =
+            LightingUniform::new_with_lights(&camera, &self.lights[..self.num_lights as usize]);
+        queue.write_buffer(
             &self.lighting_uniform_buffer,
             0,
             bytemuck::cast_slice(&[lighting_uniform]),

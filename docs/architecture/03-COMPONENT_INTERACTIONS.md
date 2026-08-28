@@ -1,6 +1,8 @@
 # Component Interactions and Data Flow
 
-This document describes how the various components of renderlib interact with each other during different phases of application execution.
+**Version:** 0.2.0  
+**Architecture:** Radical Separation (Phases 1-4 Complete)  
+**Last Updated:** 2026-08-29
 
 ## Table of Contents
 
@@ -17,254 +19,443 @@ This document describes how the various components of renderlib interact with ea
 
 ## 1. Startup Sequence
 
-The following sequence diagram shows the complete startup process:
+The startup sequence uses the new Radical Separation architecture. Here's how it works:
+
+### New Architecture Startup Flow
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                              main()                                 │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                         env_logger::init()                         │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      EventLoop::new()                              │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                   event_loop.set_control_flow()                    │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                         App::<R>::new()                             │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                   event_loop.run_app(&mut app)                      │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      EventLoop Resumed                             │
-│  ┌─────────────────────────────────────────────────────────────┐  │
-│  │  App::resumed(&mut self, event_loop: &ActiveEventLoop)       │  │
-│  └─────────────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      Window Creation                               │
-│  event_loop.create_window(Window::default_attributes())          │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                    GraphicsContext::new()                          │
-│  ┌─────────────────────────────────────────────────────────────┐  │
-│  │  1. Create wgpu::Instance with display handle                │  │
-│  │  2. Request adapter (pollster::block_on)                     │  │
-│  │  3. Request device and queue                                  │  │
-│  │  4. Get window size                                           │  │
-│  │  5. Create surface from window                                │  │
-│  │  6. Get surface capabilities and format                       │  │
-│  │  7. Create GraphicsContext struct                            │  │
-│  │  8. Configure surface (first time)                            │  │
-│  └─────────────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      Renderer::init()                              │
-│  ┌─────────────────────────────────────────────────────────────┐  │
-│  │  Async initialization:                                       │  │
-│  │  - Load shaders (load_shader_source)                         │  │
-│  │  - Create shader modules (create_shader_module)             │  │
-│  │  - Load meshes (load_gltf or use primitives)                  │  │
-│  │  - Create buffers (create_buffer, create_buffer_from_slice)  │  │
-│  │  - Create textures (create_depth_texture)                     │  │
-│  │  - Create bind group layouts                                 │  │
-│  │  - Create bind groups                                         │  │
-│  │  - Create pipelines (RenderPipelineBuilder)                  │  │
-│  │  - Create cameras (Camera::new)                               │  │
-│  │  - Create lights (Light::new)                                 │  │
-│  │  - Create uniform buffers                                      │  │
-│  └─────────────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      window.request_redraw()                       │
-└─────────────────────────────────────────────────────────────────┘
+1. Event Loop Created (winit)
+   ↓
+2. Application::<R> Created
+   │
+   ├── device: None
+   ├── state: None
+   ├── renderer: None
+   └── window: None
+   ↓
+3. Event Loop Resumed
+   ↓
+4. ApplicationHandler::resumed() Called
+   │
+   ├── 4.1 Create Window
+   │   └── window = Arc::new(event_loop.create_window(...))
+   │
+   ├── 4.2 Initialize GraphicsDevice (Async)
+   │   └── device = GraphicsDevice::new(display_handle, window.clone()).await
+   │       ├── Create wgpu::Instance
+   │       ├── Request adapter
+   │       ├── Request device and queue (wrapped in Arc)
+   │       ├── Create surface
+   │       ├── Get surface capabilities
+   │       ├── Create SurfaceConfig
+   │       └── Configure surface
+   │
+   ├── 4.3 Initialize AppState
+   │   └── state = AppState::new(device.wgpu_device())
+   │       ├── mesh_cache = MeshCache::new(device)
+   │       ├── camera = Camera::default()
+   │       ├── input = InputState::new()
+   │       ├── time = TimeState::new()
+   │       └── active_mesh = None
+   │
+   ├── 4.4 Initialize Renderer (Async)
+   │   └── renderer = R::init(RenderContext).await
+   │       └── RenderContext::new(&device, &mut state, None)
+   │           ├── device: &GraphicsDevice
+   │           ├── state: &mut AppState
+   │           └── texture_view: None
+   │
+   └── 4.5 Store References
+       ├── self.device = Some(device)
+       ├── self.state = Some(state)
+       ├── self.renderer = Some(renderer)
+       └── self.window = Some(window)
+   ↓
+5. Window Request Redraw
+   ↓
+6. Render Loop Begins
 ```
 
 ### Code Flow
 
 ```rust
-// In main()
-let event_loop = EventLoop::new().unwrap();
-event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
-let mut app = App::<TriangleRenderer>::new();
-event_loop.run_app(&mut app).unwrap();
+// In Application::<R>::resumed()
+fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+    // 1. Create window
+    let window = Arc::new(
+        event_loop
+            .create_window(Window::default_attributes())
+            .unwrap(),
+    );
 
-// In App::resumed()
-let window = Arc::new(event_loop.create_window(...).unwrap());
-let context = pollster::block_on(GraphicsContext::new(...));
-let renderer = pollster::block_on(R::init(&context));
-self.context = Some(context);
-self.renderer = Some(renderer);
-window.request_redraw();
+    // 2. Initialize GPU infrastructure
+    let device = pollster::block_on(GraphicsDevice::new(
+        event_loop.owned_display_handle(),
+        window.clone(),
+    ));
+
+    // 3. Initialize application state
+    let mut state = AppState::new(device.wgpu_device());
+
+    // 4. Create render context for initialization
+    let mut render_context = RenderContext::new(&device, &mut state, None);
+
+    // 5. Initialize renderer
+    let renderer = pollster::block_on(R::init(render_context));
+
+    // 6. Store everything
+    self.device = Some(device);
+    self.state = Some(state);
+    self.renderer = Some(renderer);
+    self.window = Some(window);
+
+    // 7. Request first redraw
+    self.window.as_ref().unwrap().request_redraw();
+}
 ```
 
 ---
 
 ## 2. Render Loop
 
+The render loop has been **updated** to use the new `RenderContext` for accessing resources.
+
 ### Single Frame Rendering
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                     WindowEvent::RedrawRequested                     │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      App::window_event()                            │
-│  - Calls renderer.input(&event) for input events                  │
-│  - Matches on WindowEvent                                         │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      Renderer::render()                             │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                    GraphicsContext::get_current_texture()          │
-│  - Tries to acquire surface texture                              │
-│  - Handles various states (Success, Suboptimal, Outdated, Lost)    │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                    GraphicsContext::create_texture_view()          │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      Command Encoder Creation                       │
-│  device.create_command_encoder(&Default::default())             │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                        Render Pass Setup                            │
-│  encoder.begin_render_pass(&wgpu::RenderPassDescriptor {         │
-│      color_attachments: [...],                                   │
-│      depth_stencil_attachment: Some(...), // if depth enabled    │
-│      ...                                                         │
-│  })                                                               │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                         Draw Commands                               │
-│  renderpass.set_pipeline(&self.render_pipeline);                  │
-│  renderpass.set_bind_group(0, &self.uniform_bind_group, &[]);     │
-│  renderpass.set_vertex_buffer(0, self.vertex_buffer.slice(..)); │
-│  renderpass.set_index_buffer(...); // if indexed rendering       │
-│  renderpass.draw(...) or renderpass.draw_indexed(...);          │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                        End Render Pass                              │
-│  drop(renderpass); // Ends the render pass                        │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                         Command Submission                          │
-│  queue.submit([encoder.finish()]);                                │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                         Present Surface                              │
-│  context.pre_present_notify();                                    │
-│  queue.present(surface_texture);                                  │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      context.request_redraw()                        │
-│  - Request next frame (continuous rendering)                      │
-└─────────────────────────────────────────────────────────────────┘
+1. WindowEvent::RedrawRequested Received
+   ↓
+2. ApplicationHandler::window_event() → Application::window_event()
+   │
+   ├── 2.1 Match on WindowEvent::RedrawRequested
+   │   ↓
+   │
+   ├── 2.2 Get Current Surface Texture
+   │   └── surface_texture = device.surface_config.get_current_texture(device.wgpu_device())
+   │       └── Handles Suboptimal, Outdated, Lost cases automatically
+   │
+   ├── 2.3 Create Texture View
+   │   └── texture_view = device.surface_config.create_texture_view(&surface_texture)
+   │
+   ├── 2.4 Create RenderContext
+   │   └── render_context = self.create_render_context(Some(surface_texture))
+   │       ├── device: &self.device
+   │       ├── state: &mut self.state
+   │       └── texture_view: Some(texture_view)
+   │
+   ├── 2.5 Call Renderer::render()
+   │   └── self.renderer.as_mut().unwrap().render(render_context)
+   │       └── Renderer accesses resources via context:
+   │           ├── device = context.wgpu_device()
+   │           ├── queue = context.wgpu_queue()
+   │           ├── state = context.state()
+   │           └── texture_view = context.get_texture_view()
+   │
+   └── 2.6 Present Surface Texture
+       └── surface_texture.present()
+           └── Handles presentation automatically
+   ↓
+3. Request Next Redraw (for animation)
+   └── context.request_redraw()
+```
+
+### Renderer render() Method Example
+
+```rust
+fn render(&mut self, mut context: RenderContext<'_>) {
+    // 1. Access resources
+    let device = context.wgpu_device();
+    let queue = context.wgpu_queue();
+    let state = context.state();
+    let texture_view = context.get_texture_view().expect("No texture view");
+    
+    // 2. Update time
+    state.update_time();
+    let delta_time = state.time.delta_time;
+    
+    // 3. Handle input (if needed)
+    // Note: Input events are handled separately in input() method
+    
+    // 4. Update camera (if needed)
+    // Camera updates would typically be in input() method
+    
+    // 5. Create command encoder
+    let mut encoder = device.create_command_encoder(
+        &wgpu::CommandEncoderDescriptor::default()
+    );
+    
+    // 6. Begin render pass
+    let mut render_pass = encoder.begin_render_pass(
+        &wgpu::RenderPassDescriptor {
+            label: Some("Main Render Pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: texture_view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color {
+                        r: 0.1,
+                        g: 0.2,
+                        b: 0.3,
+                        a: 1.0,
+                    }),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            ..Default::default()
+        }
+    );
+    
+    // 7. Set pipeline and buffers
+    render_pass.set_pipeline(&self.render_pipeline);
+    render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+    
+    // 8. Draw
+    render_pass.draw(0..3, 0..1);
+    
+    // 9. End render pass
+    drop(render_pass);
+    
+    // 10. Submit command buffer
+    queue.submit(std::iter::once(encoder.finish()));
+    
+    // 11. Request next redraw for animation
+    context.request_redraw();
+}
 ```
 
 ### Forward Rendering Example
 
+Here's a more complete example showing forward rendering with the new architecture:
+
 ```rust
-// In ForwardRenderer::render()
-fn render(&mut self, context: &mut GraphicsContext) {
-    // 1. Handle shader reload
-    if self.should_reload {
-        self.reload_shader(&context.device).ok();
-        self.should_reload = false;
+struct ForwardRenderer {
+    render_pipeline: wgpu::RenderPipeline,
+    vertex_buffer: wgpu::Buffer,
+    index_buffer: wgpu::Buffer,
+    num_indices: u32,
+    geometry_uniform_buffer: wgpu::Buffer,
+    geometry_bind_group: wgpu::BindGroup,
+    lighting_uniform_buffer: wgpu::Buffer,
+    lighting_bind_group: wgpu::BindGroup,
+    depth_texture: wgpu::Texture,
+    depth_texture_view: wgpu::TextureView,
+}
+
+impl AppRenderer for ForwardRenderer {
+    async fn init(mut context: RenderContext<'_>) -> Self {
+        let device = context.wgpu_device();
+        let surface_format = context.device().surface_format();
+        
+        // Load mesh
+        let mesh_handle = context.state().mesh_cache.load_mut(
+            &MeshSource::Path("mesh.gltf".to_string())
+        ).expect("Failed to load mesh");
+        
+        let (mesh_asset, mesh_resource) = context.state().mesh_cache.get_both(mesh_handle)
+            .expect("Failed to get mesh");
+        
+        // Create depth texture
+        let (depth_texture, depth_texture_view) = renderlib::device_helpers::create_depth_texture(
+            device, context.size().width, context.size().height, Some("Depth Texture")
+        );
+        
+        // Create render pipeline
+        let shader_module = renderlib::device_helpers::create_shader_module_from_file(
+            device, "forward.wgsl"
+        ).expect("Failed to load shader");
+        
+        let render_pipeline = RenderPipelineBuilder::new(device)
+            .with_label("Forward Pipeline")
+            .with_shader_module(shader_module)
+            .with_vertex_entry("vs_main")
+            .with_fragment_entry("fs_main")
+            .with_vertex_buffers(vec![PosColorNormalVertex::desc()])
+            .with_color_formats(vec![surface_format])
+            .with_depth_stencil(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::Less,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            })
+            .build()
+            .expect("Failed to create pipeline");
+        
+        // Create uniform buffers
+        let geometry_uniform_buffer = renderlib::device_helpers::create_buffer(
+            device,
+            std::mem::size_of::<GeometryUniform>() as wgpu::BufferAddress,
+            wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            Some("Geometry Uniform Buffer")
+        );
+        
+        let lighting_uniform_buffer = renderlib::device_helpers::create_buffer(
+            device,
+            std::mem::size_of::<LightingUniform>() as wgpu::BufferAddress,
+            wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            Some("Lighting Uniform Buffer")
+        );
+        
+        // Create bind groups
+        let geometry_bind_group_layout = renderlib::device_helpers::create_uniform_bind_group_layout(
+            device, Some("Geometry Bind Group Layout")
+        );
+        let geometry_bind_group = renderlib::device_helpers::create_uniform_bind_group(
+            device, &geometry_uniform_buffer, &geometry_bind_group_layout, Some("Geometry Bind Group")
+        );
+        
+        let lighting_bind_group_layout = renderlib::device_helpers::create_uniform_bind_group_layout(
+            device, Some("Lighting Bind Group Layout")
+        );
+        let lighting_bind_group = renderlib::device_helpers::create_uniform_bind_group(
+            device, &lighting_uniform_buffer, &lighting_bind_group_layout, Some("Lighting Bind Group")
+        );
+        
+        Self {
+            render_pipeline,
+            vertex_buffer: mesh_resource.vertex_buffer,
+            index_buffer: mesh_resource.index_buffer,
+            num_indices: mesh_resource.num_indices,
+            geometry_uniform_buffer,
+            geometry_bind_group,
+            lighting_uniform_buffer,
+            lighting_bind_group,
+            depth_texture,
+            depth_texture_view,
+        }
     }
-    
-    // 2. Update uniforms
-    let geometry_uniform = GeometryUniform::new(&self.camera, model, aspect);
-    context.queue.write_buffer(&self.geometry_uniform_buffer, 0, 
-        bytemuck::cast_slice(&[geometry_uniform]));
-    
-    // 3. Get surface texture
-    let surface_texture = match context.get_current_texture() {
-        Some(texture) => texture,
-        None => return,
-    };
-    let texture_view = context.create_texture_view(&surface_texture);
-    
-    // 4. Create encoder and render pass
-    let mut encoder = context.device.create_command_encoder(&Default::default());
-    let mut renderpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-            view: &texture_view,
-            ops: wgpu::Operations {
-                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                store: wgpu::StoreOp::Store,
-            },
-            ..Default::default()
-        })],
-        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-            view: &self.depth_texture_view,
-            depth_ops: Some(wgpu::Operations {
-                load: wgpu::LoadOp::Clear(1.0),
-                store: wgpu::StoreOp::Store,
-            }),
-            ..Default::default()
-        }),
-        ..Default::default()
-    });
-    
-    // 5. Draw
-    renderpass.set_pipeline(&self.render_pipeline);
-    renderpass.set_bind_group(0, &self.uniform_bind_group, &[]);
-    renderpass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-    renderpass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-    renderpass.draw_indexed(0..self.num_indices, 0, 0..1);
-    
-    // 6. Submit and present
-    context.queue.submit([encoder.finish()]);
-    context.pre_present_notify();
-    context.queue.present(surface_texture);
-    context.request_redraw();
+
+    fn render(&mut self, mut context: RenderContext<'_>) {
+        let device = context.wgpu_device();
+        let queue = context.wgpu_queue();
+        let state = context.state();
+        let texture_view = context.get_texture_view().expect("No texture view");
+        
+        // Update time
+        state.update_time();
+        let delta_time = state.time.delta_time;
+        
+        // Update geometry uniform
+        let aspect_ratio = context.size().width as f32 / context.size().height as f32;
+        let camera_uniform = CameraUniform::from_camera(&state.camera, aspect_ratio);
+        let model_matrix = Matrix4::from_scale(0.5);
+        let geometry_uniform = GeometryUniform {
+            mvp: (camera_uniform.view_projection * model_matrix).into(),
+            model: model_matrix.into(),
+        };
+        
+        queue.write_buffer(
+            &self.geometry_uniform_buffer,
+            0,
+            bytemuck::bytes_of(&geometry_uniform)
+        );
+        
+        // Update lighting uniform
+        let lighting_uniform = LightingUniform::new_with_lights(
+            [state.camera.position.x, state.camera.position.y, state.camera.position.z],
+            &[] // No lights for now
+        );
+        
+        queue.write_buffer(
+            &self.lighting_uniform_buffer,
+            0,
+            bytemuck::bytes_of(&lighting_uniform)
+        );
+        
+        // Create command encoder
+        let mut encoder = device.create_command_encoder(
+            &wgpu::CommandEncoderDescriptor::default()
+        );
+        
+        // Begin render pass with depth
+        let mut render_pass = encoder.begin_render_pass(
+            &wgpu::RenderPassDescriptor {
+                label: Some("Forward Render Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: texture_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.1,
+                            g: 0.2,
+                            b: 0.3,
+                            a: 1.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth_texture_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                ..Default::default()
+            }
+        );
+        
+        // Set pipeline and bind groups
+        render_pass.set_pipeline(&self.render_pipeline);
+        render_pass.set_bind_group(0, &self.geometry_bind_group, &[]);
+        render_pass.set_bind_group(1, &self.lighting_bind_group, &[]);
+        
+        // Set vertex and index buffers
+        render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+        render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+        
+        // Draw
+        render_pass.draw_indexed(0..self.num_indices, 0, 0..1);
+        
+        // End render pass
+        drop(render_pass);
+        
+        // Submit command buffer
+        queue.submit(std::iter::once(encoder.finish()));
+        
+        // Request next redraw
+        context.request_redraw();
+    }
+
+    fn resize(&mut self, context: RenderContext<'_>, new_size: winit::dpi::PhysicalSize<u32>) {
+        let device = context.wgpu_device();
+        
+        // Recreate depth texture with new size
+        let (new_depth_texture, new_depth_texture_view) = renderlib::device_helpers::create_depth_texture(
+            device, new_size.width, new_size.height, Some("Depth Texture")
+        );
+        
+        self.depth_texture = new_depth_texture;
+        self.depth_texture_view = new_depth_texture_view;
+    }
+
+    fn input(&mut self, mut context: RenderContext<'_>, event: &WindowEvent) {
+        let state = context.state();
+        
+        // Handle input events
+        match event {
+            WindowEvent::KeyboardInput { event: key_event, .. } => {
+                if let Key::Character(c) = &key_event.logical_key {
+                    if c.to_ascii_lowercase() == "r" && key_event.state.is_pressed() {
+                        // Reload shaders
+                        self.reload_shader(context);
+                    }
+                }
+            }
+            _ => {}
+        }
+        
+        // Update input state
+        state.input.handle_window_event(event);
+        
+        // Apply player input to camera
+        let player_input = state.input.get_player_input();
+        let mut player = renderlib::player::PlayerState::new(state.camera.clone());
+        player.apply_input(&player_input, state.time.delta_time);
+        state.camera = player.get_camera().clone();
+    }
 }
 ```
 
@@ -272,72 +463,61 @@ fn render(&mut self, context: &mut GraphicsContext) {
 
 ## 3. Resize Handling
 
+Resize handling has been **updated** to work with the new architecture.
+
 ### Resize Sequence
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                      WindowEvent::Resized(new_size)                  │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      App::window_event()                            │
-│  - Matches on WindowEvent::Resized                               │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                    GraphicsContext::resize()                        │
-│  - Updates self.size = new_size                                  │
-│  - Calls self.configure_surface()                                 │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                    GraphicsContext::configure_surface()              │
-│  - Creates SurfaceConfiguration with new size                     │
-│  - Calls surface.configure(&device, &surface_config)              │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      Renderer::resize()                            │
-│  - Recreates size-dependent resources                           │
-│  - For deferred: resizes G-buffer and depth texture              │
-│  - For forward: recreates depth texture                          │
-└─────────────────────────────────────────────────────────────────┘
+1. WindowEvent::Resized(new_size) Received
+   ↓
+2. ApplicationHandler::window_event() → Application::window_event()
+   │
+   ├── 2.1 Match on WindowEvent::Resized(new_size)
+   │   ↓
+   │
+   ├── 2.2 Resize GraphicsDevice Surface
+   │   └── device.resize(new_size)
+   │       └── surface_config.resize(new_size, device.wgpu_device())
+   │           └── Reconfigures surface with new dimensions
+   │
+   ├── 2.3 Create RenderContext
+   │   └── render_context = self.create_render_context(None)
+   │       ├── device: &self.device
+   │       ├── state: &mut self.state
+   │       └── texture_view: None (no texture yet)
+   │
+   ├── 2.4 Call Renderer::resize()
+   │   └── self.renderer.as_mut().unwrap().resize(render_context, new_size)
+   │       └── Renderer recreates size-dependent resources
+   │
+   └── 2.5 Request Redraw
+       └── self.window.as_ref().unwrap().request_redraw()
 ```
 
 ### Code Example
 
 ```rust
-// In ForwardRenderer::resize()
-fn resize(&mut self, context: &mut GraphicsContext, new_size: PhysicalSize<u32>) {
-    // Recreate depth texture with new size
-    let (depth_texture, depth_texture_view) = create_depth_texture(
-        &context.device,
-        new_size.width,
-        new_size.height,
-        Some("Depth Texture"),
-    );
-    self.depth_texture = depth_texture;
-    self.depth_texture_view = depth_texture_view;
-}
-
-// In DeferredRenderer::resize()
-fn resize(&mut self, context: &mut GraphicsContext, new_size: PhysicalSize<u32>) {
-    // Resize G-buffer
-    self.gbuffer.resize(&context.device, new_size.width, new_size.height);
+fn resize(&mut self, mut context: RenderContext<'_>, new_size: winit::dpi::PhysicalSize<u32>) {
+    let device = context.wgpu_device();
+    let state = context.state();
     
-    // Recreate depth texture
-    let (depth_texture, depth_texture_view) = create_depth_texture(
-        &context.device,
-        new_size.width,
-        new_size.height,
-        Some("Deferred Depth Texture"),
+    // Update camera aspect ratio
+    let aspect_ratio = new_size.width as f32 / new_size.height as f32;
+    state.camera.set_fov(cgmath::Rad(std::f32::consts::PI / 3.0));
+    // Note: Camera aspect ratio is handled in the projection matrix calculation
+    
+    // Recreate depth texture with new size
+    let (new_depth_texture, new_depth_texture_view) = renderlib::device_helpers::create_depth_texture(
+        device, new_size.width, new_size.height, Some("Depth Texture")
     );
-    self.depth_texture = depth_texture;
-    self.depth_texture_view = depth_texture_view;
+    
+    self.depth_texture = new_depth_texture;
+    self.depth_texture_view = new_depth_texture_view;
+    
+    // Recreate G-buffer if using deferred rendering
+    if let Some(gbuffer) = &mut self.gbuffer {
+        gbuffer.resize(device, new_size.width, new_size.height);
+    }
 }
 ```
 
@@ -345,91 +525,91 @@ fn resize(&mut self, context: &mut GraphicsContext, new_size: PhysicalSize<u32>)
 
 ## 4. Shader Hot-Reloading
 
+Shader hot-reloading allows you to **modify shaders without restarting** the application. This feature works with the new architecture.
+
 ### Reload Sequence
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                    User Presses 'R' Key                             │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      WindowEvent::KeyboardInput                      │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      Renderer::input()                              │
-│  - Checks for 'R' key press                                       │
-│  - Sets should_reload flag to true                                │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      Renderer::render()                             │
-│  - Checks should_reload flag                                      │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      Renderer::reload_shader()                       │
-│  - Calls load_shader_source() to read updated shader file         │
-│  - Calls create_shader_module() with new source                   │
-│  - Creates new pipeline using RenderPipelineBuilder               │
-│  - Updates self.render_pipeline                                  │
-│  - Clears should_reload flag                                       │
-└─────────────────────────────────────────────────────────────────┘
+1. User Presses 'R' Key
+   ↓
+2. WindowEvent::KeyboardInput Received
+   ↓
+3. Application::input() → Renderer::input()
+   │
+   ├── 3.1 Check for 'R' key press
+   │   └── if key == 'r' && pressed: reload_shader()
+   │
+   └── 3.2 Call reload_shader()
+       │
+       ├── 3.2.1 Load New Shader Source
+       │   └── source = std::fs::read_to_string(shader_path)?
+       │
+       ├── 3.2.2 Create New Shader Module
+       │   └── new_module = device.create_shader_module(&desc)?
+       │
+       ├── 3.2.3 Create New Pipeline
+       │   └── new_pipeline = create_pipeline(device, new_module, ...)
+       │
+       └── 3.2.4 Replace Old Pipeline
+           └── self.render_pipeline = new_pipeline
 ```
 
 ### Code Example
 
 ```rust
-// In TriangleRenderer
-fn input(&mut self, event: &WindowEvent) {
-    if let WindowEvent::KeyboardInput { event: key_event, .. } = event {
-        if let Key::Character(c) = &key_event.logical_key {
-            if c.to_ascii_lowercase() == "r" && key_event.state.is_pressed() {
-                self.should_reload = true;
+fn reload_shader(&mut self, mut context: RenderContext<'_>) {
+    let device = context.wgpu_device();
+    let surface_format = context.device().surface_format();
+    
+    // Try to reload shader
+    match renderlib::device_helpers::create_shader_module_from_file(
+        device,
+        "forward.wgsl"
+    ) {
+        Ok(shader_module) => {
+            // Create new pipeline with updated shader
+            let new_pipeline = RenderPipelineBuilder::new(device)
+                .with_label("Forward Pipeline (Reloaded)")
+                .with_shader_module(shader_module)
+                .with_vertex_entry("vs_main")
+                .with_fragment_entry("fs_main")
+                .with_vertex_buffers(vec![PosColorNormalVertex::desc()])
+                .with_color_formats(vec![surface_format])
+                .with_depth_stencil(wgpu::DepthStencilState {
+                    format: wgpu::TextureFormat::Depth32Float,
+                    depth_write_enabled: true,
+                    depth_compare: wgpu::CompareFunction::Less,
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState::default(),
+                })
+                .build()
+                .expect("Failed to create reloaded pipeline");
+            
+            // Replace old pipeline
+            self.render_pipeline = new_pipeline;
+            
+            println!("Shader reloaded successfully!");
+        }
+        Err(e) => {
+            eprintln!("Failed to reload shader: {:?}", e);
+        }
+    }
+}
+
+fn input(&mut self, mut context: RenderContext<'_>, event: &WindowEvent) {
+    match event {
+        WindowEvent::KeyboardInput { event: key_event, .. } => {
+            if let Key::Character(c) = &key_event.logical_key {
+                if c.to_ascii_lowercase() == "r" && key_event.state.is_pressed() {
+                    self.reload_shader(context);
+                }
             }
         }
+        _ => {}
     }
-}
-
-fn render(&mut self, context: &mut GraphicsContext) {
-    if self.should_reload {
-        eprintln!("Reloading triangle shader...");
-        if let Err(e) = self.reload_shader(&context.device) {
-            eprintln!("Shader reload failed: {}", e);
-        } else {
-            eprintln!("Triangle shader reloaded successfully!");
-        }
-    }
-    // ... rest of rendering
-}
-
-fn reload_shader(&mut self, device: &wgpu::Device) -> Result<(), String> {
-    let shader_src = load_shader_source(SHADER_PATH)?;
-    let shader_module = create_shader_module(device, Some("Triangle Shader"), &shader_src);
     
-    let render_pipeline_layout = create_pipeline_layout(
-        device,
-        Some("Render Pipeline Layout"),
-        &[Some(&self.bind_group_layout)],
-    );
-    
-    let pipeline = RenderPipelineBuilder::new(device)
-        .with_label(Some("Render Pipeline"))
-        .with_layout(Some(&render_pipeline_layout))
-        .with_shader_module(&shader_module)
-        .with_vertex_entry("vs_main")
-        .with_fragment_entry("fs_main")
-        .with_vertex_buffers(&[Some(PosColorVertex::desc())])
-        .with_color_formats(&[self.surface_format.add_srgb_suffix()])
-        .build();
-    
-    self.render_pipeline = pipeline;
-    self.should_reload = false;
-    Ok(())
+    // Forward to input state
+    context.state().input.handle_window_event(event);
 }
 ```
 
@@ -437,177 +617,157 @@ fn reload_shader(&mut self, device: &wgpu::Device) -> Result<(), String> {
 
 ## 5. Mesh Loading Pipeline
 
+The mesh loading pipeline has been **enhanced** with source deduplication in Phase 2.
+
 ### GLTF Loading Sequence
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                      load_gltf(path)                               │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      Check File Extension                           │
-│  - .glb: Read as bytes, then import_slice()                       │
-│  - .gltf: Import directly (handles external buffers)             │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      Parse GLTF Document                            │
-│  - gltf::import() or gltf::import_slice()                         │
-│  - Returns (document, buffers, images)                            │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      Get First Mesh                                 │
-│  - document.meshes().next()                                      │
-│  - Returns Err(MeshLoadError::NoMeshesFound) if none             │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      First Pass: Collect Positions                  │
-│  - Iterate through all primitives                                 │
-│  - Read positions (required)                                       │
-│  - Collect all positions for bounding box calculation            │
-│  - Read indices (or generate if missing)                          │
-│  - Adjust indices with vertex offset for multi-primitive meshes   │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      Second Pass: Build Vertices                    │
-│  - Iterate through all primitives again                           │
-│  - Read positions (required)                                       │
-│  - Read normals (optional, default to [0,1,0])                    │
-│  - Create PosColorNormalVertex with default color [0.8, 0.8, 0.8] │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      Calculate Bounding Box                         │
-│  - Find min/max for x, y, z from all positions                    │
-│  - Calculate scale factor: 2.0 / max_dimension                     │
-│  - Calculate center: (min + max) / 2                             │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      Return Mesh Struct                             │
-│  - vertices: Vec<PosColorNormalVertex>                           │
-│  - indices: Vec<u16>                                               │
-│  - bounding_box: BoundingBox                                       │
-│  - scale: f32                                                     │
-│  - center: Vector3<f32>                                           │
-└─────────────────────────────────────────────────────────────────┘
+1. Renderer Calls mesh_cache.load_mut()
+   │
+   ├── 1.1 Check Source-to-Handle Map
+   │   └── if source_to_handle.contains(&source): return existing handle
+   │
+   ├── 1.2 Load Mesh from Source
+   │   │
+   │   ├── 1.2.1 Match on MeshSource
+   │   │   ├── Path: Load from GLTF/GLB file
+   │   │   │   └── load_gltf(path)
+   │   │   │       ├── Open file
+   │   │   │       ├── Parse GLTF
+   │   │   │       ├── Extract meshes
+   │   │   │       ├── Calculate bounding box
+   │   │   │       ├── Calculate scale and center
+   │   │   │       └── Return Mesh
+   │   │   └── Primitive: Use built-in generator
+   │   │       ├── Match on PrimitiveType
+   │   │       │   ├── Triangle: triangle_vertices()
+   │   │       │   └── Cube: cube_vertices()
+   │   │       └── Create Mesh from vertices
+   │   │
+   │   └── 1.2.2 Create MeshAsset
+   │       └── cpu_assets.insert(next_handle, Arc::new(mesh_asset))
+   │
+   ├── 1.3 Create GPU Resources
+   │   └── gpu_resources.insert(next_handle, Arc::new(mesh_resource))
+   │       └── create_buffers(device, &mesh.vertices, &mesh.indices)
+   │
+   ├── 1.4 Update Maps
+   │   ├── source_to_handle.insert(source.clone(), next_handle)
+   │   └── next_handle += 1
+   │
+   └── 1.5 Return Handle
+       └── return Ok(next_handle)
 ```
 
 ### Fallback to Built-in Primitives
 
+If GLTF loading fails or a primitive source is specified, the system falls back to built-in generators:
+
 ```rust
-// In ForwardRenderer::init()
-let mesh = match load_gltf(DEFAULT_MESH_PATH) {
-    Ok(mesh) => mesh,
-    Err(_) => {
-        let (vertices, indices) = primitives::cube_vertices();
-        Mesh::new(vertices, indices)
+// In load_gltf or load method:
+match source {
+    MeshSource::Path(path) => {
+        // Try to load from file
+        match load_gltf(path) {
+            Ok(mesh) => Ok(mesh),
+            Err(_) => {
+                // Fallback to built-in primitive based on path
+                if path.contains("triangle") {
+                    Ok(create_triangle_mesh())
+                } else if path.contains("cube") {
+                    Ok(create_cube_mesh())
+                } else {
+                    Err(MeshLoadError::ImportError(format!("Failed to load mesh from {}", path)))
+                }
+            }
+        }
     }
-};
+    MeshSource::Primitive(primitive_type) => {
+        match primitive_type {
+            PrimitiveType::Triangle => Ok(create_triangle_mesh()),
+            PrimitiveType::Cube => Ok(create_cube_mesh()),
+        }
+    }
+}
 ```
 
 ### Buffer Creation
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                      Mesh::create_buffers()                         │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      create_buffer_from_slice()                      │
-│  - For vertex buffer: wgpu::BufferUsages::VERTEX                │
-│  - For index buffer: wgpu::BufferUsages::INDEX                   │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      Return (vertex_buffer, index_buffer, count)    │
-└─────────────────────────────────────────────────────────────────┘
+Once a mesh is loaded, its GPU buffers are created:
+
+```rust
+// In Mesh::create_buffers()
+pub fn create_buffers(
+    &self,
+    device: &wgpu::Device,
+) -> Result<(wgpu::Buffer, wgpu::Buffer), wgpu::BufferAsyncError> {
+    // Create vertex buffer
+    let vertex_buffer = device.create_buffer_init(
+        &wgpu::util::BufferInitDescriptor {
+            label: Some("Vertex Buffer"),
+            contents: &self.vertices,
+            usage: wgpu::BufferUsages::VERTEX,
+        }
+    );
+    
+    // Create index buffer
+    let index_buffer = device.create_buffer_init(
+        &wgpu::util::BufferInitDescriptor {
+            label: Some("Index Buffer"),
+            contents: &self.indices,
+            usage: wgpu::BufferUsages::INDEX,
+        }
+    );
+    
+    Ok((vertex_buffer, index_buffer))
+}
 ```
 
 ---
 
 ## 6. Deferred Rendering Pipeline
 
+Deferred rendering uses a **two-pass architecture** with the new `GBuffer` system.
+
 ### Two-Pass Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                         DeferredRenderer::render()                   │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      Check and Handle Resize                         │
-│  - If G-buffer size != context.size, resize G-buffer and depth     │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      Update Uniform Buffers                          │
-│  - Update geometry_uniform_buffer with MVP and model matrices     │
-│  - Update lighting_uniform_buffer with camera and lights          │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      Get Surface Texture                            │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      Create Command Encoder                          │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      GEOMETRY PASS                                  │
-│  ┌─────────────────────────────────────────────────────────────┐  │
-│  │  1. Begin render pass with G-buffer color attachments         │  │
-│  │     - position_view, normal_view, albedo_view as targets      │  │
-│  │     - depth_texture_view as depth attachment                 │  │
-│  │  2. Set geometry pipeline                                       │  │
-│  │  3. Set geometry bind group (MVP matrices)                     │  │
-│  │  4. Set vertex and index buffers                                │  │
-│  │  5. Draw indexed (mesh rendering)                               │  │
-│  └─────────────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      LIGHTING PASS                                  │
-│  ┌─────────────────────────────────────────────────────────────┐  │
-│  │  1. Create G-buffer bind group (if not cached)                │  │
-│  │  2. Begin render pass with surface view as target              │  │
-│  │  3. Set lighting pipeline                                       │  │
-│  │  4. Set G-buffer bind group (bindings 0-3)                     │  │
-│  │  5. Set lighting uniform bind group (binding 4)                │  │
-│  │  6. Set quad vertex buffer                                       │  │
-│  │  7. Draw (full-screen quad, 6 vertices)                         │  │
-│  └─────────────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      Submit and Present                             │
-└─────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│                    DEFERRED RENDERING PIPELINE                   │
+├─────────────────────────────────────────────────────────────┤
+│                                                               │
+│  Phase 1: Geometry Pass                                        │
+│  ┌─────────────────────────────────────────────────────────┐  │
+│  │  Input: Mesh vertices, MVP matrix                          │  │
+│  │  Output: Position, Normal, Albedo to G-Buffer             │  │
+│  │                                                         │  │
+│  │  for each mesh:                                         │  │
+│  │    Set geometry pipeline                                 │  │
+│  │    Set vertex/index buffers                              │  │
+│  │    Set geometry uniform (MVP matrix)                     │  │
+│  │    Draw mesh → G-Buffer (3 textures)                      │  │
+│  └─────────────────────────────────────────────────────────┘  │
+│                                                               │
+│  Phase 2: Lighting Pass                                       │
+│  ┌─────────────────────────────────────────────────────────┐  │
+│  │  Input: G-Buffer textures, Light positions/colors         │  │
+│  │  Output: Final color to framebuffer                       │  │
+│  │                                                         │  │
+│  │    Set lighting pipeline                                 │  │
+│  │    Set full-screen quad vertex buffer                    │  │
+│  │    Set G-Buffer bind group                               │  │
+│  │    Set lighting uniform (view position, lights)           │  │
+│  │    Draw full-screen quad → Framebuffer                    │  │
+│  └─────────────────────────────────────────────────────────┘  │
+│                                                               │
+└─────────────────────────────────────────────────────────────┘
 ```
 
 ### G-Buffer Bind Group Layout
 
+The G-Buffer uses a specific bind group layout for shader access:
+
 ```rust
-// In GBuffer::bind_group_layout()
 pub fn bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("GBuffer Bind Group Layout"),
@@ -657,159 +817,312 @@ pub fn bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
 }
 ```
 
+### Geometry Pass Shader (deferred_geometry.wgsl)
+
+```wgsl
+// Vertex shader
+struct VertexInput {
+    @location(0) position: vec3<f32>,
+    @location(1) color: vec3<f32>,
+    @location(2) normal: vec3<f32>,
+};
+
+struct VertexOutput {
+    @builtin(position) clip_position: vec4<f32>,
+    @location(0) world_position: vec3<f32>,
+    @location(1) world_normal: vec3<f32>,
+    @location(2) albedo: vec3<f32>,
+};
+
+@group(0) @binding(0)
+var<uniform> geometry: GeometryUniform;
+
+@vertex
+fn vs_main(in: VertexInput) -> VertexOutput {
+    var out: VertexOutput;
+    out.clip_position = geometry.mvp * vec4<f32>(in.position, 1.0);
+    out.world_position = (geometry.model * vec4<f32>(in.position, 1.0)).xyz;
+    out.world_normal = normalize((geometry.model * vec4<f32>(in.normal, 0.0)).xyz);
+    out.albedo = in.color;
+    return out;
+}
+
+// Fragment shader
+@group(0) @binding(0)
+var position_texture: texture_2d<f32>;
+@group(0) @binding(1)
+var normal_texture: texture_2d<f32>;
+@group(0) @binding(2)
+var albedo_texture: texture_2d<f32>;
+
+@fragment
+fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    // Write to multiple render targets
+    return vec4<f32>(in.world_position, 1.0);
+    // Note: In WGSL, you need to use @location directives for each output
+}
+```
+
+### Lighting Pass Shader (deferred_lighting.wgsl)
+
+```wgsl
+@group(0) @binding(0)
+var gbuffer_position: texture_2d<f32>;
+@group(0) @binding(1)
+var gbuffer_normal: texture_2d<f32>;
+@group(0) @binding(2)
+var gbuffer_albedo: texture_2d<f32>;
+@group(0) @binding(3)
+var gbuffer_sampler: sampler;
+
+@group(1) @binding(0)
+var<uniform> lighting: LightingUniform;
+
+@fragment
+fn fs_main(@builtin(position) pixel_coord: vec2<u32>) -> @location(0) vec4<f32> {
+    let uv = vec2<f32>(f32(pixel_coord.x), f32(pixel_coord.y)) / 
+             vec2<f32>(textureDimensions(gbuffer_position));
+    
+    // Sample G-buffer
+    let position = textureSample(gbuffer_position, gbuffer_sampler, uv).xyz;
+    let normal = textureSample(gbuffer_normal, gbuffer_sampler, uv).xyz;
+    let albedo = textureSample(gbuffer_albedo, gbuffer_sampler, uv).xyz;
+    
+    // Calculate lighting
+    let view_dir = normalize(lighting.view_position.xyz - position);
+    let normal = normalize(normal);
+    
+    // Simple directional light (for demonstration)
+    let light_dir = normalize(vec3<f32>(1.0, -1.0, -1.0));
+    let diffuse = max(dot(normal, light_dir), 0.0);
+    
+    // Combine with albedo
+    let color = albedo * diffuse * vec3<f32>(1.0, 0.9, 0.8); // Light color
+    
+    return vec4<f32>(color, 1.0);
+}
+```
+
 ---
 
 ## 7. Uniform Buffer Management
 
+Uniform buffers are used to pass data from CPU to GPU that changes frequently (e.g., every frame).
+
 ### Uniform Update Pattern
 
-All demos follow a consistent pattern for updating uniform buffers:
+The typical pattern for updating uniform buffers:
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                      Calculate Current State                         │
-│  - elapsed time, model matrix, view matrix, etc.                   │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      Create Uniform Struct                          │
-│  - GeometryUniform::new(&camera, model, aspect)                  │
-│  - LightingUniform::new_with_lights(&camera, &lights)            │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      Write to GPU Buffer                            │
-│  queue.write_buffer(&uniform_buffer, 0, bytemuck::cast_slice(&[uniform])) │
-└─────────────────────────────────────────────────────────────────┘
+1. Create Uniform Buffer (Once)
+   │
+   ├── Allocate buffer with UNIFORM | COPY_DST usage
+   └── Store in renderer struct
+   ↓
+2. Update Uniform Data (Every Frame)
+   │
+   ├── Calculate new uniform values (matrices, positions, etc.)
+   └── Write to buffer using queue.write_buffer()
+   ↓
+3. Use in Rendering
+   │
+   └── Buffer is bound to bind group, which is set in render pass
 ```
 
 ### Uniform Buffer Types
 
-| Uniform Type | Size | Used In | Shader Stage |
-|-------------|------|---------|--------------|
-| `CameraUniform` | 192 bytes | Camera matrices | Vertex |
-| `GeometryUniform` | 128 bytes | MVP and model matrices | Vertex |
-| `LightingUniform` | Variable | View position and lights | Fragment |
-| `Transform` | N/A (CPU only) | Model matrix generation | N/A |
+Renderlib provides several uniform types:
 
-### Lighting Uniform Layout
+#### CameraUniform
 
 ```rust
 #[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct LightingUniform {
-    pub view_position: [f32; 4],      // 16 bytes
-    pub num_lights: u32,               // 4 bytes
-    pub _padding: [f32; 3],           // 12 bytes (alignment padding)
-    pub lights: [Light; MAX_LIGHTS],  // 32 * MAX_LIGHTS bytes
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct CameraUniform {
+    pub view: [[f32; 4]; 4],
+    pub projection: [[f32; 4]; 4],
+    pub view_projection: [[f32; 4]; 4],
+    pub view_position: [f32; 4],
 }
 ```
 
-Total size: 16 + 4 + 12 + (32 * MAX_LIGHTS) = 32 + (32 * MAX_LIGHTS) bytes
+#### GeometryUniform
+
+```rust
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct GeometryUniform {
+    pub mvp: [[f32; 4]; 4],
+    pub model: [[f32; 4]; 4],
+}
+```
+
+#### LightingUniform
+
+```rust
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct LightingUniform {
+    pub view_position: [f32; 4],
+    pub num_lights: u32,
+    pub _padding: [u32; 3],
+    pub lights: [Light; MAX_LIGHTS],
+}
+```
+
+### Lighting Uniform Layout
+
+The lighting uniform is designed to work with the shader:
+
+```wgsl
+// In shader:
+@group(1) @binding(0)
+var<uniform> lighting: LightingUniform;
+
+// Access in fragment shader:
+let view_pos = lighting.view_position.xyz;
+let num_lights = lighting.num_lights;
+for (var i: u32 = 0; i < num_lights; i++) {
+    let light = lighting.lights[i];
+    // Use light.position and light.color
+}
+```
 
 ---
 
 ## 8. Bind Group Hierarchy
 
+Bind groups organize resources (buffers, textures, samplers) for access in shaders. Each bind group corresponds to a bind group layout.
+
 ### Bind Group Organization
 
-Each demo uses a different bind group organization based on its needs:
+Different renderers use different bind group organizations:
 
 #### Triangle Demo (Simple)
 
 ```
 Bind Group 0:
-├── Binding 0: Uniform Buffer (rotation matrix)
-    └── Visibility: Vertex
+├── Uniform Buffer: GeometryUniform (MVP matrix)
+└── Usage: Vertex shader
+
+Shader:
+@group(0) @binding(0)
+var<uniform> uniforms: GeometryUniform;
 ```
 
 #### Forward Demo
 
 ```
 Bind Group 0:
-├── Binding 0: Geometry Uniform Buffer (MVP, model)
-│   └── Visibility: Vertex
-└── Binding 1: Lighting Uniform Buffer (view_position, lights)
-    └── Visibility: Fragment
+├── Uniform Buffer: GeometryUniform (MVP + Model matrices)
+└── Usage: Vertex shader
+
+Bind Group 1:
+├── Uniform Buffer: LightingUniform (view position, lights)
+└── Usage: Fragment shader
+
+Shader:
+@group(0) @binding(0)
+var<uniform> geometry: GeometryUniform;
+
+@group(1) @binding(0)
+var<uniform> lighting: LightingUniform;
 ```
 
 #### Deferred Demo
 
 ```
 Geometry Pass:
-  Bind Group 0:
-  └── Binding 0: Geometry Uniform Buffer
-      └── Visibility: Vertex
+├── Bind Group 0:
+│   └── Uniform Buffer: GeometryUniform (MVP + Model matrices)
+│
+Deferred Lighting Pass:
+├── Bind Group 0:
+│   ├── Texture: Position (binding 0)
+│   ├── Texture: Normal (binding 1)
+│   ├── Texture: Albedo (binding 2)
+│   └── Sampler: G-buffer sampler (binding 3)
+│
+└── Bind Group 1:
+    └── Uniform Buffer: LightingUniform
 
-Lighting Pass:
-  Bind Group 0:
-  ├── Binding 0: Position Texture (GBuffer)
-  │   └── Visibility: Fragment
-  ├── Binding 1: Normal Texture (GBuffer)
-  │   └── Visibility: Fragment
-  ├── Binding 2: Albedo Texture (GBuffer)
-  │   └── Visibility: Fragment
-  └── Binding 3: Sampler
-      └── Visibility: Fragment
-  
-  Bind Group 1:
-  └── Binding 0: Lighting Uniform Buffer
-      └── Visibility: Fragment
+Shader (Lighting Pass):
+@group(0) @binding(0)
+var gbuffer_position: texture_2d<f32>;
+@group(0) @binding(1)
+var gbuffer_normal: texture_2d<f32>;
+@group(0) @binding(2)
+var gbuffer_albedo: texture_2d<f32>;
+@group(0) @binding(3)
+var gbuffer_sampler: sampler;
+
+@group(1) @binding(0)
+var<uniform> lighting: LightingUniform;
 ```
 
 ### Bind Group Layout Creation
 
+Bind group layouts define how resources are accessed in shaders:
+
 ```rust
-// Simple uniform bind group layout
-let layout = create_uniform_bind_group_layout(
-    device,
-    Some("Uniform Bind Group Layout"),
-    wgpu::ShaderStages::VERTEX,
+// Create a bind group layout for a uniform buffer
+let bind_group_layout = device.create_bind_group_layout(
+    &wgpu::BindGroupLayoutDescriptor {
+        label: Some("Uniform Bind Group Layout"),
+        entries: &[wgpu::BindGroupLayoutEntry {
+            binding: 0,
+            visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: Some(std::mem::size_of::<CameraUniform>() as wgpu::BufferAddress),
+            },
+            count: None,
+        }],
+    }
 );
 
-// Custom bind group layout with multiple entries
-let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-    label: Some("Custom Bind Group Layout"),
-    entries: &[
-        wgpu::BindGroupLayoutEntry {
-            binding: 0,
-            visibility: wgpu::ShaderStages::VERTEX,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Uniform,
-                has_dynamic_offset: false,
-                min_binding_size: None,
+// Create a bind group for a texture and sampler
+let texture_bind_group_layout = device.create_bind_group_layout(
+    &wgpu::BindGroupLayoutDescriptor {
+        label: Some("Texture Bind Group Layout"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
             },
-            count: None,
-        },
-        wgpu::BindGroupLayoutEntry {
-            binding: 1,
-            visibility: wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Uniform,
-                has_dynamic_offset: false,
-                min_binding_size: None,
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
             },
-            count: None,
-        },
-    ],
-});
+        ],
+    }
+);
 ```
 
 ---
 
 ## Summary
 
-The component interactions in renderlib follow consistent patterns:
+The Radical Separation architecture provides **clean, type-safe access** to all resources through the `RenderContext`:
 
-1. **Initialization**: Async, bottom-up (context first, then renderer)
-2. **Rendering**: Top-down (renderer controls the flow)
-3. **Resize**: Context first, then renderer for size-dependent resources
-4. **Hot-Reloading**: Flag-based, checked at start of render
-5. **Mesh Loading**: Two-pass (positions first for bounding box, then full vertices)
-6. **Deferred Rendering**: Two-pass (geometry then lighting)
-7. **Uniform Updates**: Calculate → Create struct → Write to GPU
-8. **Bind Groups**: Organized by frequency of change and shader stage
+| Resource | Old Architecture | New Architecture |
+|----------|-----------------|------------------|
+| Device | `context.device` | `context.wgpu_device()` |
+| Queue | `context.queue` | `context.wgpu_queue()` |
+| Mesh Cache | `context.mesh_cache` | `context.state().mesh_cache` |
+| Camera | `context.camera` | `context.state().camera` |
+| Input | `context.input` | `context.state().input` |
+| Time | N/A | `context.state().time` |
+| Surface Format | `context.surface_format` | `context.device().surface_format()` |
+| Window Size | `context.size` | `context.device().size()` |
 
-These patterns ensure consistent behavior across all demos and make it easy to create new renderers.
+**All component interactions now flow through the `RenderContext`, providing a consistent, clean interface for renderers to access all necessary resources.**
