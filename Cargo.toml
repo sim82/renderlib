@@ -13,6 +13,7 @@ thiserror = "2.0.19"
 env_logger = "0.11.11"
 cgmath = "0.18"
 gltf = { version = "1.4.1", features = ["import"] }
+hecs = "0.11.1"
 
 [[bin]]
 name = "triangle"
@@ -29,3 +30,7 @@ path = "src/bin/deferred.rs"
 [[bin]]
 name = "deferred_with_camera_controls"
 path = "src/bin/deferred_with_camera_controls.rs"
+
+[[bin]]
+name = "multi_mesh"
+path = "src/bin/multi_mesh.rs"
