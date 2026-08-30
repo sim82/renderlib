@@ -34,7 +34,7 @@ use renderlib::mesh::{quad_vertices_2d, MeshHandle, MeshSource, QuadVertex};
 use renderlib::player::PlayerState;
 
 /// Number of mesh instances to create
-const NUM_MESH_INSTANCES: usize = 1024;
+const NUM_MESH_INSTANCES: usize = 1024 * 10;
 
 /// Base spacing between mesh instances (in world units)
 /// Using 3.0 to ensure we can see past them

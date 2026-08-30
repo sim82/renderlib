@@ -15,6 +15,7 @@
 //! GPU infrastructure and application state.
 
 use cgmath::{Matrix4, Rad, Vector3};
+use wgpu::util::DeviceExt;
 use winit::event::WindowEvent;
 use winit::event_loop::EventLoop;
 use winit::keyboard::Key;
@@ -60,7 +61,7 @@ impl InstanceUniform {
 }
 
 /// Number of mesh instances to create
-const NUM_MESH_INSTANCES: usize = 1024;
+const NUM_MESH_INSTANCES: usize = 1024 * 10;
 
 /// Base spacing between mesh instances (in world units)
 const BASE_SPACING: f32 = 3.0;
@@ -180,7 +181,7 @@ impl DeferredRenderer {
     fn create_geometry_pipeline(
         device: &wgpu::Device,
         geometry_bind_group_layout: &wgpu::BindGroupLayout,
-        gbuffer_bind_group_layout: &wgpu::BindGroupLayout,
+        _gbuffer_bind_group_layout: &wgpu::BindGroupLayout,
         _surface_format: wgpu::TextureFormat,
         shader_src: &str,
     ) -> Result<wgpu::RenderPipeline, String> {
@@ -338,7 +339,7 @@ impl AppRenderer for DeferredRenderer {
         // Generate position offsets in an expanding cubic grid
         let position_offsets = generate_expanding_grid_positions(NUM_MESH_INSTANCES, BASE_SPACING);
 
-        // Create combined bind group layout for group 0 (camera + instances)
+        // Create combined bind group layout for group 0 (camera + instance storage buffer)
         let geometry_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("Geometry Bind Group Layout"),
@@ -356,17 +357,14 @@ impl AppRenderer for DeferredRenderer {
                         },
                         count: None,
                     },
-                    // Binding 1: Instance uniforms array
+                    // Binding 1: Instance storage buffer
                     wgpu::BindGroupLayoutEntry {
                         binding: 1,
                         visibility: wgpu::ShaderStages::VERTEX,
                         ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Uniform,
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
                             has_dynamic_offset: false,
-                            min_binding_size: wgpu::BufferSize::new(
-                                std::mem::size_of::<Matrix4<f32>>() as u64
-                                    * NUM_MESH_INSTANCES as u64,
-                            ),
+                            min_binding_size: None,
                         },
                         count: None,
                     },
@@ -394,8 +392,10 @@ impl AppRenderer for DeferredRenderer {
             wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         );
 
-        // Create instance buffer for model matrices only
-        let instance_uniforms: Vec<InstanceUniform> = mesh_instances
+        // Create storage buffer for instance data
+        // Storage buffers can be much larger than uniform buffers (no 64KB limit)
+        // First, create initial instance data
+        let instance_data: Vec<InstanceUniform> = mesh_instances
             .iter()
             .map(|instance| {
                 // Compute model matrix using the SAME logic as before
@@ -408,14 +408,13 @@ impl AppRenderer for DeferredRenderer {
             })
             .collect();
 
-        let instance_buffer = create_buffer_from_slice(
-            device,
-            Some("Instance Model Buffer"),
-            &instance_uniforms,
-            wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        );
+        let instance_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Instance Storage Buffer"),
+            contents: bytemuck::cast_slice(&instance_data),
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        });
 
-        // Create combined bind group for group 0 (camera + instances)
+        // Create combined bind group for group 0 (camera + instance storage buffer)
         let geometry_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Geometry Bind Group"),
             layout: &geometry_bind_group_layout,
@@ -425,7 +424,7 @@ impl AppRenderer for DeferredRenderer {
                     binding: 0,
                     resource: camera_uniform_buffer.as_entire_binding(),
                 },
-                // Binding 1: Instance uniforms
+                // Binding 1: Instance storage buffer
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: instance_buffer.as_entire_binding(),
@@ -663,9 +662,9 @@ impl AppRenderer for DeferredRenderer {
             bytemuck::cast_slice(&[camera_uniform]),
         );
 
-        // Update instance uniform buffer with current model matrices only
+        // Update instance storage buffer with current model matrices only
         // Using the SAME model matrix calculation as the non-instanced version
-        let instance_uniforms: Vec<InstanceUniform> = self
+        let instance_data: Vec<InstanceUniform> = self
             .mesh_instances
             .iter()
             .enumerate()
@@ -680,10 +679,11 @@ impl AppRenderer for DeferredRenderer {
             })
             .collect();
 
+        // Write instance data to storage buffer
         queue.write_buffer(
             &self.instance_buffer,
             0,
-            bytemuck::cast_slice(&instance_uniforms),
+            bytemuck::cast_slice(&instance_data),
         );
 
         // Create command encoder
