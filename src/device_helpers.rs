@@ -367,123 +367,119 @@ pub fn create_bind_group_auto(
     })
 }
 
-/// Enum for defining bind group layout entry types with automatic binding numbering
-pub enum BindGroupLayoutEntryAuto {
-    /// Uniform buffer entry
-    UniformBuffer {
-        visibility: wgpu::ShaderStages,
-        min_binding_size: Option<std::num::NonZero<u64>>,
-    },
-    /// Storage buffer entry
-    StorageBuffer {
-        visibility: wgpu::ShaderStages,
-        read_only: bool,
-    },
-    /// Texture entry
-    Texture {
-        visibility: wgpu::ShaderStages,
-        sample_type: wgpu::TextureSampleType,
-        view_dimension: wgpu::TextureViewDimension,
-    },
-    /// Sampler entry
-    Sampler { visibility: wgpu::ShaderStages },
-}
-
-/// Generic helper to create a bind group layout with automatic binding numbering
+/// Builder for creating bind group layouts with a fluent API.
 ///
-/// Creates bind group layout entries with sequential binding numbers starting from 0.
-/// Each entry in the slice gets assigned the next binding number automatically.
-///
-/// # Arguments
-///
-/// * `device` - The wgpu device
-/// * `label` - Optional label for the bind group layout
-/// * `entries` - Slice of bind group layout entry definitions
+/// Supports automatic binding numbering starting from 0.
 ///
 /// # Example
 ///
 /// ```ignore
-/// // For geometry bind group layout with camera uniforms and instance storage
-/// let geometry_bind_group_layout = create_bind_group_layout_auto(
-///     device,
-///     Some("Geometry Bind Group Layout"),
-///     &[
-///         BindGroupLayoutEntryAuto::UniformBuffer {
-///             visibility: wgpu::ShaderStages::VERTEX,
-///             min_binding_size: Some(std::mem::size_of::<CameraUniform>() as u64),
-///         },
-///         BindGroupLayoutEntryAuto::StorageBuffer {
-///             visibility: wgpu::ShaderStages::VERTEX,
-///             read_only: true,
-///         },
-///     ],
-/// );
+/// let layout = BindGroupLayoutBuilder::new(device)
+///     .with_label("Geometry Bind Group Layout")
+///     .with_uniform_buffer(wgpu::ShaderStages::VERTEX, Some(std::mem::size_of::<CameraUniform>() as u64))
+///     .with_storage_buffer(wgpu::ShaderStages::VERTEX, true)
+///     .build();
 /// ```
-pub fn create_bind_group_layout_auto(
-    device: &wgpu::Device,
-    label: Option<&str>,
-    entries: &[BindGroupLayoutEntryAuto],
-) -> wgpu::BindGroupLayout {
-    let wgpu_entries: Vec<wgpu::BindGroupLayoutEntry> = entries
-        .iter()
-        .enumerate()
-        .map(|(binding, entry)| {
-            let (ty, visibility) = match entry {
-                BindGroupLayoutEntryAuto::UniformBuffer {
-                    visibility,
-                    min_binding_size,
-                } => (
-                    wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: *min_binding_size,
-                    },
-                    *visibility,
-                ),
-                BindGroupLayoutEntryAuto::StorageBuffer {
-                    visibility,
-                    read_only,
-                } => (
-                    wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage {
-                            read_only: *read_only,
-                        },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    *visibility,
-                ),
-                BindGroupLayoutEntryAuto::Texture {
-                    visibility,
-                    sample_type,
-                    view_dimension,
-                } => (
-                    wgpu::BindingType::Texture {
-                        sample_type: *sample_type,
-                        view_dimension: *view_dimension,
-                        multisampled: false,
-                    },
-                    *visibility,
-                ),
-                BindGroupLayoutEntryAuto::Sampler { visibility } => (
-                    wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    *visibility,
-                ),
-            };
+pub struct BindGroupLayoutBuilder<'a> {
+    device: &'a wgpu::Device,
+    label: Option<&'a str>,
+    entries: Vec<wgpu::BindGroupLayoutEntry>,
+}
 
-            wgpu::BindGroupLayoutEntry {
-                binding: binding as u32,
-                visibility,
-                ty,
-                count: None,
-            }
-        })
-        .collect();
+impl<'a> BindGroupLayoutBuilder<'a> {
+    /// Create a new builder for a bind group layout.
+    pub fn new(device: &'a wgpu::Device) -> Self {
+        Self {
+            device,
+            label: None,
+            entries: Vec::new(),
+        }
+    }
 
-    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label,
-        entries: &wgpu_entries,
-    })
+    /// Set the layout label.
+    pub fn with_label(mut self, label: Option<&'a str>) -> Self {
+        self.label = label;
+        self
+    }
+
+    /// Add a uniform buffer entry with automatic binding numbering.
+    pub fn with_uniform_buffer(
+        mut self,
+        visibility: wgpu::ShaderStages,
+        min_binding_size: Option<u64>,
+    ) -> Self {
+        let binding = self.entries.len() as u32;
+        let wgpu_min_binding_size = min_binding_size.and_then(|size| wgpu::BufferSize::new(size));
+        self.entries.push(wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: wgpu_min_binding_size,
+            },
+            count: None,
+        });
+        self
+    }
+
+    /// Add a storage buffer entry with automatic binding numbering.
+    pub fn with_storage_buffer(mut self, visibility: wgpu::ShaderStages, read_only: bool) -> Self {
+        let binding = self.entries.len() as u32;
+        self.entries.push(wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only },
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        });
+        self
+    }
+
+    /// Add a texture entry with automatic binding numbering.
+    pub fn with_texture(
+        mut self,
+        visibility: wgpu::ShaderStages,
+        sample_type: wgpu::TextureSampleType,
+        view_dimension: wgpu::TextureViewDimension,
+    ) -> Self {
+        let binding = self.entries.len() as u32;
+        self.entries.push(wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility,
+            ty: wgpu::BindingType::Texture {
+                sample_type,
+                view_dimension,
+                multisampled: false,
+            },
+            count: None,
+        });
+        self
+    }
+
+    /// Add a sampler entry with automatic binding numbering.
+    pub fn with_sampler(mut self, visibility: wgpu::ShaderStages) -> Self {
+        let binding = self.entries.len() as u32;
+        self.entries.push(wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility,
+            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+            count: None,
+        });
+        self
+    }
+
+    /// Build the bind group layout.
+    pub fn build(self) -> wgpu::BindGroupLayout {
+        self.device
+            .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: self.label,
+                entries: &self.entries,
+            })
+    }
 }
 
 /// Creates a depth texture and view for depth testing.

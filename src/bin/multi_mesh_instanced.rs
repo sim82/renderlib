@@ -339,22 +339,14 @@ impl AppRenderer for DeferredRenderer {
         let position_offsets = generate_expanding_grid_positions(NUM_MESH_INSTANCES, BASE_SPACING);
 
         // Create combined bind group layout for group 0 (camera + instance storage buffer)
-        let geometry_bind_group_layout = create_bind_group_layout_auto(
-            device,
-            Some("Geometry Bind Group Layout"),
-            &[
-                BindGroupLayoutEntryAuto::UniformBuffer {
-                    visibility: wgpu::ShaderStages::VERTEX,
-                    min_binding_size: std::num::NonZeroU64::new(
-                        std::mem::size_of::<CameraUniform>() as u64,
-                    ),
-                },
-                BindGroupLayoutEntryAuto::StorageBuffer {
-                    visibility: wgpu::ShaderStages::VERTEX,
-                    read_only: true,
-                },
-            ],
-        );
+        let geometry_bind_group_layout = BindGroupLayoutBuilder::new(device)
+            .with_label(Some("Geometry Bind Group Layout"))
+            .with_uniform_buffer(
+                wgpu::ShaderStages::VERTEX,
+                Some(std::mem::size_of::<CameraUniform>() as u64),
+            )
+            .with_storage_buffer(wgpu::ShaderStages::VERTEX, true)
+            .build();
 
         // Create mesh instances with grid positions
         let mut mesh_instances = Vec::with_capacity(NUM_MESH_INSTANCES);
