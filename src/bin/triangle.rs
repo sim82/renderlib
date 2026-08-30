@@ -102,11 +102,10 @@ impl AppRenderer for TriangleRenderer {
         );
 
         // Create bind group layout and bind group using helpers
-        let bind_group_layout = create_uniform_bind_group_layout(
-            device,
-            Some("Uniform Bind Group Layout"),
-            wgpu::ShaderStages::VERTEX,
-        );
+        let bind_group_layout = BindGroupLayoutBuilder::new(device)
+            .with_label(Some("Uniform Bind Group Layout"))
+            .with_uniform_buffer(wgpu::ShaderStages::VERTEX, None)
+            .build();
 
         let uniform_bind_group = create_bind_group_auto(
             device,

@@ -285,27 +285,6 @@ impl<'a> RenderPipelineBuilder<'a> {
     }
 }
 
-/// Generic helper to create a bind group layout for a uniform buffer
-pub fn create_uniform_bind_group_layout(
-    device: &wgpu::Device,
-    label: Option<&str>,
-    visibility: wgpu::ShaderStages,
-) -> wgpu::BindGroupLayout {
-    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label,
-        entries: &[wgpu::BindGroupLayoutEntry {
-            binding: 0,
-            visibility,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Uniform,
-                has_dynamic_offset: false,
-                min_binding_size: None,
-            },
-            count: None,
-        }],
-    })
-}
-
 /// Generic helper to create a bind group with automatic binding numbering
 ///
 /// Creates bind group entries with sequential binding numbers starting from 0.

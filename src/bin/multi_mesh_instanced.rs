@@ -470,11 +470,10 @@ impl AppRenderer for DeferredRenderer {
         );
 
         // Create lighting uniform bind group layout and bind group using framework helpers
-        let lighting_uniform_bind_group_layout = create_uniform_bind_group_layout(
-            device,
-            Some("Lighting Uniform Bind Group Layout"),
-            wgpu::ShaderStages::FRAGMENT,
-        );
+        let lighting_uniform_bind_group_layout = BindGroupLayoutBuilder::new(device)
+            .with_label(Some("Lighting Uniform Bind Group Layout"))
+            .with_uniform_buffer(wgpu::ShaderStages::FRAGMENT, None)
+            .build();
 
         let lighting_uniform_bind_group = create_bind_group_auto(
             device,

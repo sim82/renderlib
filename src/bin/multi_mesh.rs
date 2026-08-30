@@ -302,11 +302,10 @@ impl AppRenderer for DeferredRenderer {
         let position_offsets = generate_expanding_grid_positions(NUM_MESH_INSTANCES, BASE_SPACING);
 
         // Create geometry bind group layout (shared for all instances)
-        let geometry_bind_group_layout = create_uniform_bind_group_layout(
-            device,
-            Some("Geometry Uniform Bind Group Layout"),
-            wgpu::ShaderStages::VERTEX,
-        );
+        let geometry_bind_group_layout = BindGroupLayoutBuilder::new(device)
+            .with_label(Some("Geometry Uniform Bind Group Layout"))
+            .with_uniform_buffer(wgpu::ShaderStages::VERTEX, None)
+            .build();
 
         // Create mesh instances with grid positions
         let mut mesh_instances = Vec::with_capacity(NUM_MESH_INSTANCES);
@@ -376,11 +375,10 @@ impl AppRenderer for DeferredRenderer {
         );
 
         // Create geometry bind group layout (shared for all instances)
-        let geometry_bind_group_layout = create_uniform_bind_group_layout(
-            device,
-            Some("Geometry Uniform Bind Group Layout"),
-            wgpu::ShaderStages::VERTEX,
-        );
+        let geometry_bind_group_layout = BindGroupLayoutBuilder::new(device)
+            .with_label(Some("Geometry Uniform Bind Group Layout"))
+            .with_uniform_buffer(wgpu::ShaderStages::VERTEX, None)
+            .build();
 
         // Create three instances of the same mesh with different positions
         // Create geometry pipeline
@@ -412,11 +410,10 @@ impl AppRenderer for DeferredRenderer {
         );
 
         // Create lighting uniform bind group layout and bind group using framework helpers
-        let lighting_uniform_bind_group_layout = create_uniform_bind_group_layout(
-            device,
-            Some("Lighting Uniform Bind Group Layout"),
-            wgpu::ShaderStages::FRAGMENT,
-        );
+        let lighting_uniform_bind_group_layout = BindGroupLayoutBuilder::new(device)
+            .with_label(Some("Lighting Uniform Bind Group Layout"))
+            .with_uniform_buffer(wgpu::ShaderStages::FRAGMENT, None)
+            .build();
 
         let lighting_uniform_bind_group = create_bind_group_auto(
             device,

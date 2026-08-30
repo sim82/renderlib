@@ -283,11 +283,10 @@ impl AppRenderer for DeferredRenderer {
         );
 
         // Create geometry bind group layout and bind group using framework helpers
-        let geometry_bind_group_layout = create_uniform_bind_group_layout(
-            device,
-            Some("Geometry Uniform Bind Group Layout"),
-            wgpu::ShaderStages::VERTEX,
-        );
+        let geometry_bind_group_layout = BindGroupLayoutBuilder::new(device)
+            .with_label(Some("Geometry Uniform Bind Group Layout"))
+            .with_uniform_buffer(wgpu::ShaderStages::VERTEX, None)
+            .build();
 
         let geometry_bind_group = create_bind_group_auto(
             device,
@@ -325,11 +324,10 @@ impl AppRenderer for DeferredRenderer {
         );
 
         // Create lighting uniform bind group layout and bind group using framework helpers
-        let lighting_uniform_bind_group_layout = create_uniform_bind_group_layout(
-            device,
-            Some("Lighting Uniform Bind Group Layout"),
-            wgpu::ShaderStages::FRAGMENT,
-        );
+        let lighting_uniform_bind_group_layout = BindGroupLayoutBuilder::new(device)
+            .with_label(Some("Lighting Uniform Bind Group Layout"))
+            .with_uniform_buffer(wgpu::ShaderStages::FRAGMENT, None)
+            .build();
 
         let lighting_uniform_bind_group = create_bind_group_auto(
             device,
