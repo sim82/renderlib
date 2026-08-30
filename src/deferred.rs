@@ -3,6 +3,8 @@
 //! Provides G-buffer management for deferred shading. A G-buffer stores geometry
 //! data (position, normal, albedo) in separate textures for later lighting computation.
 
+use crate::device_helpers::create_bind_group_auto;
+
 /// G-buffer for deferred rendering.
 ///
 /// Contains three textures (position, normal, albedo) and a sampler for lighting pass access.
@@ -224,28 +226,17 @@ impl GBuffer {
 
     /// Create a bind group for this G-buffer with the given device.
     pub fn create_bind_group(&self, device: &wgpu::Device) -> wgpu::BindGroup {
-        device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("GBuffer Bind Group"),
-            layout: &self.bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&self.position_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&self.normal_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::TextureView(&self.albedo_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
-                },
+        create_bind_group_auto(
+            device,
+            Some("GBuffer Bind Group"),
+            &self.bind_group_layout,
+            &[
+                wgpu::BindingResource::TextureView(&self.position_view),
+                wgpu::BindingResource::TextureView(&self.normal_view),
+                wgpu::BindingResource::TextureView(&self.albedo_view),
+                wgpu::BindingResource::Sampler(&self.sampler),
             ],
-        })
+        )
     }
 
     /// Returns the texture formats used by the G-buffer color attachments.

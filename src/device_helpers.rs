@@ -323,6 +323,67 @@ pub fn create_uniform_bind_group(
     })
 }
 
+/// Generic helper to create a bind group with automatic binding numbering
+///
+/// Creates bind group entries with sequential binding numbers starting from 0.
+/// Each resource in the slice gets assigned the next binding number automatically.
+///
+/// # Arguments
+///
+/// * `device` - The wgpu device
+/// * `label` - Optional label for the bind group
+/// * `layout` - The bind group layout
+/// * `resources` - Slice of binding resources (texture views, samplers, buffers)
+///
+/// # Example
+///
+/// ```ignore
+/// // For geometry bind group with camera and instance buffers
+/// let geometry_bind_group = create_bind_group_auto(
+///     device,
+///     Some("Geometry Bind Group"),
+///     &geometry_bind_group_layout,
+///     &[
+///         camera_uniform_buffer.as_entire_binding(),
+///         instance_buffer.as_entire_binding(),
+///     ],
+/// );
+///
+/// // For GBuffer with textures and sampler
+/// let gbuffer_bind_group = create_bind_group_auto(
+///     context.wgpu_device(),
+///     Some("GBuffer Bind Group"),
+///     &self.gbuffer.bind_group_layout,
+///     &[
+///         wgpu::BindingResource::TextureView(&self.gbuffer.position_view),
+///         wgpu::BindingResource::TextureView(&self.gbuffer.normal_view),
+///         wgpu::BindingResource::TextureView(&self.gbuffer.albedo_view),
+///         wgpu::BindingResource::Sampler(&self.gbuffer.sampler),
+///     ],
+/// );
+/// ```
+pub fn create_bind_group_auto(
+    device: &wgpu::Device,
+    label: Option<&str>,
+    layout: &wgpu::BindGroupLayout,
+    resources: &[wgpu::BindingResource],
+) -> wgpu::BindGroup {
+    let entries: Vec<wgpu::BindGroupEntry> = resources
+        .iter()
+        .enumerate()
+        .map(|(binding, resource)| wgpu::BindGroupEntry {
+            binding: binding as u32,
+            resource: resource.clone(),
+        })
+        .collect();
+
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label,
+        layout,
+        entries: &entries,
+    })
+}
+
 /// Creates a depth texture and view for depth testing.
 ///
 /// # Arguments

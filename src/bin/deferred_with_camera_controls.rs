@@ -479,33 +479,17 @@ impl AppRenderer for DeferredRenderer {
             .create_command_encoder(&Default::default());
 
         // Create G-buffer bind group for lighting pass
-        let gbuffer_bind_group =
-            context
-                .wgpu_device()
-                .create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("GBuffer Bind Group"),
-                    layout: &self.gbuffer.bind_group_layout,
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: wgpu::BindingResource::TextureView(
-                                &self.gbuffer.position_view,
-                            ),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: wgpu::BindingResource::TextureView(&self.gbuffer.normal_view),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 2,
-                            resource: wgpu::BindingResource::TextureView(&self.gbuffer.albedo_view),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 3,
-                            resource: wgpu::BindingResource::Sampler(&self.gbuffer.sampler),
-                        },
-                    ],
-                });
+        let gbuffer_bind_group = create_bind_group_auto(
+            context.wgpu_device(),
+            Some("GBuffer Bind Group"),
+            &self.gbuffer.bind_group_layout,
+            &[
+                wgpu::BindingResource::TextureView(&self.gbuffer.position_view),
+                wgpu::BindingResource::TextureView(&self.gbuffer.normal_view),
+                wgpu::BindingResource::TextureView(&self.gbuffer.albedo_view),
+                wgpu::BindingResource::Sampler(&self.gbuffer.sampler),
+            ],
+        );
 
         // =====================================================================
         // GEOMETRY PASS: Render mesh to G-buffer

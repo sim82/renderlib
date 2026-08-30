@@ -15,7 +15,6 @@
 //! GPU infrastructure and application state.
 
 use cgmath::{Matrix4, Rad, Vector3};
-use wgpu::util::DeviceExt;
 use winit::event::WindowEvent;
 use winit::event_loop::EventLoop;
 use winit::keyboard::Key;
@@ -408,29 +407,23 @@ impl AppRenderer for DeferredRenderer {
             })
             .collect();
 
-        let instance_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Instance Storage Buffer"),
-            contents: bytemuck::cast_slice(&instance_data),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        });
+        let instance_buffer = create_buffer_from_slice(
+            device,
+            Some("Instance Storage Buffer"),
+            &instance_data,
+            wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        );
 
         // Create combined bind group for group 0 (camera + instance storage buffer)
-        let geometry_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Geometry Bind Group"),
-            layout: &geometry_bind_group_layout,
-            entries: &[
-                // Binding 0: Camera uniforms
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: camera_uniform_buffer.as_entire_binding(),
-                },
-                // Binding 1: Instance storage buffer
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: instance_buffer.as_entire_binding(),
-                },
+        let geometry_bind_group = create_bind_group_auto(
+            device,
+            Some("Geometry Bind Group"),
+            &geometry_bind_group_layout,
+            &[
+                camera_uniform_buffer.as_entire_binding(),
+                instance_buffer.as_entire_binding(),
             ],
-        });
+        );
 
         // Create instance index buffer
         let instance_indices: Vec<u32> = (0..NUM_MESH_INSTANCES as u32).collect();
@@ -692,33 +685,17 @@ impl AppRenderer for DeferredRenderer {
             .create_command_encoder(&Default::default());
 
         // Create G-buffer bind group for lighting pass
-        let gbuffer_bind_group =
-            context
-                .wgpu_device()
-                .create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("GBuffer Bind Group"),
-                    layout: &self.gbuffer.bind_group_layout,
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: wgpu::BindingResource::TextureView(
-                                &self.gbuffer.position_view,
-                            ),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: wgpu::BindingResource::TextureView(&self.gbuffer.normal_view),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 2,
-                            resource: wgpu::BindingResource::TextureView(&self.gbuffer.albedo_view),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 3,
-                            resource: wgpu::BindingResource::Sampler(&self.gbuffer.sampler),
-                        },
-                    ],
-                });
+        let gbuffer_bind_group = create_bind_group_auto(
+            context.wgpu_device(),
+            Some("GBuffer Bind Group"),
+            &self.gbuffer.bind_group_layout,
+            &[
+                wgpu::BindingResource::TextureView(&self.gbuffer.position_view),
+                wgpu::BindingResource::TextureView(&self.gbuffer.normal_view),
+                wgpu::BindingResource::TextureView(&self.gbuffer.albedo_view),
+                wgpu::BindingResource::Sampler(&self.gbuffer.sampler),
+            ],
+        );
 
         // =====================================================================
         // GEOMETRY PASS: Render all mesh instances to G-buffer with instancing

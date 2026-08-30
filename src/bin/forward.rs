@@ -219,20 +219,15 @@ impl AppRenderer for ForwardRenderer {
             ],
         });
 
-        let uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Uniform Bind Group"),
-            layout: &bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: geometry_uniform_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: lighting_uniform_buffer.as_entire_binding(),
-                },
+        let uniform_bind_group = create_bind_group_auto(
+            &device,
+            Some("Uniform Bind Group"),
+            &bind_group_layout,
+            &[
+                geometry_uniform_buffer.as_entire_binding(),
+                lighting_uniform_buffer.as_entire_binding(),
             ],
-        });
+        );
 
         // Create initial pipeline
         let render_pipeline = Self::create_pipeline(device, &bind_group_layout, surface_format)
