@@ -321,11 +321,11 @@ impl AppRenderer for DeferredRenderer {
             );
 
             // Create per-instance bind group
-            let bind_group = create_uniform_bind_group(
+            let bind_group = create_bind_group_auto(
                 device,
                 Some("Mesh Instance Bind Group"),
                 &geometry_bind_group_layout,
-                &uniform_buffer,
+                &[uniform_buffer.as_entire_binding()],
             );
 
             mesh_instances.push(MeshInstance::new(
@@ -418,11 +418,11 @@ impl AppRenderer for DeferredRenderer {
             wgpu::ShaderStages::FRAGMENT,
         );
 
-        let lighting_uniform_bind_group = create_uniform_bind_group(
+        let lighting_uniform_bind_group = create_bind_group_auto(
             device,
             Some("Lighting Uniform Bind Group"),
             &lighting_uniform_bind_group_layout,
-            &lighting_uniform_buffer,
+            &[lighting_uniform_buffer.as_entire_binding()],
         );
 
         // Create lighting pipeline

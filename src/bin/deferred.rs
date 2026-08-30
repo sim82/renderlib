@@ -287,11 +287,11 @@ impl AppRenderer for DeferredRenderer {
             wgpu::ShaderStages::VERTEX,
         );
 
-        let geometry_bind_group = create_uniform_bind_group(
+        let geometry_bind_group = create_bind_group_auto(
             device,
             Some("Geometry Uniform Bind Group"),
             &geometry_bind_group_layout,
-            &geometry_uniform_buffer,
+            &[geometry_uniform_buffer.as_entire_binding()],
         );
 
         // Create geometry pipeline
@@ -329,11 +329,11 @@ impl AppRenderer for DeferredRenderer {
             wgpu::ShaderStages::FRAGMENT,
         );
 
-        let lighting_uniform_bind_group = create_uniform_bind_group(
+        let lighting_uniform_bind_group = create_bind_group_auto(
             device,
             Some("Lighting Uniform Bind Group"),
             &lighting_uniform_bind_group_layout,
-            &lighting_uniform_buffer,
+            &[lighting_uniform_buffer.as_entire_binding()],
         );
 
         // Create lighting pipeline

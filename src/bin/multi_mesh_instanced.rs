@@ -339,36 +339,22 @@ impl AppRenderer for DeferredRenderer {
         let position_offsets = generate_expanding_grid_positions(NUM_MESH_INSTANCES, BASE_SPACING);
 
         // Create combined bind group layout for group 0 (camera + instance storage buffer)
-        let geometry_bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("Geometry Bind Group Layout"),
-                entries: &[
-                    // Binding 0: Camera uniforms
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::VERTEX,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
-                            min_binding_size: wgpu::BufferSize::new(
-                                std::mem::size_of::<CameraUniform>() as u64,
-                            ),
-                        },
-                        count: None,
-                    },
-                    // Binding 1: Instance storage buffer
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::VERTEX,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: true },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                ],
-            });
+        let geometry_bind_group_layout = create_bind_group_layout_auto(
+            device,
+            Some("Geometry Bind Group Layout"),
+            &[
+                BindGroupLayoutEntryAuto::UniformBuffer {
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    min_binding_size: std::num::NonZeroU64::new(
+                        std::mem::size_of::<CameraUniform>() as u64,
+                    ),
+                },
+                BindGroupLayoutEntryAuto::StorageBuffer {
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    read_only: true,
+                },
+            ],
+        );
 
         // Create mesh instances with grid positions
         let mut mesh_instances = Vec::with_capacity(NUM_MESH_INSTANCES);
@@ -498,11 +484,11 @@ impl AppRenderer for DeferredRenderer {
             wgpu::ShaderStages::FRAGMENT,
         );
 
-        let lighting_uniform_bind_group = create_uniform_bind_group(
+        let lighting_uniform_bind_group = create_bind_group_auto(
             device,
             Some("Lighting Uniform Bind Group"),
             &lighting_uniform_bind_group_layout,
-            &lighting_uniform_buffer,
+            &[lighting_uniform_buffer.as_entire_binding()],
         );
 
         // Create lighting pipeline

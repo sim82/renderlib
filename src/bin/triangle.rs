@@ -108,11 +108,11 @@ impl AppRenderer for TriangleRenderer {
             wgpu::ShaderStages::VERTEX,
         );
 
-        let uniform_bind_group = create_uniform_bind_group(
+        let uniform_bind_group = create_bind_group_auto(
             device,
             Some("Uniform Bind Group"),
             &bind_group_layout,
-            &uniform_buffer,
+            &[uniform_buffer.as_entire_binding()],
         );
 
         // Create initial pipeline
