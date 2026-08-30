@@ -34,3 +34,7 @@ path = "src/bin/deferred_with_camera_controls.rs"
 [[bin]]
 name = "multi_mesh"
 path = "src/bin/multi_mesh.rs"
+
+[[bin]]
+name = "multi_mesh_instanced"
+path = "src/bin/multi_mesh_instanced.rs"
