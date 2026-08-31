@@ -5,7 +5,7 @@
         "commandLine": "",
         "environment": [
         ],
-        "executable": "/home/sim/src/renderlib/target/release/multi_mesh_instanced",
+        "executable": "/home/sim/src/renderlib/target/release/multi_mesh_instanced_gpucull",
         "inject": false,
         "numQueuedFrames": 0,
         "options": {
