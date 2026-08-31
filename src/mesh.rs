@@ -51,6 +51,17 @@ impl BoundingBox {
             (self.min.z + self.max.z) / 2.0,
         )
     }
+
+    /// Calculate a bounding sphere that encloses this bounding box
+    pub fn bounding_sphere(&self) -> (Vector3<f32>, f32) {
+        let center = self.center();
+        // Calculate the radius as half the diagonal of the box
+        let width = self.max.x - self.min.x;
+        let height = self.max.y - self.min.y;
+        let depth = self.max.z - self.min.z;
+        let radius = (width * width + height * height + depth * depth).sqrt() / 2.0;
+        (center, radius)
+    }
 }
 
 /// Opaque handle to a mesh in the cache.
@@ -84,6 +95,10 @@ pub struct MeshAsset {
     pub indices: Vec<u16>,
     /// The bounding box of the mesh.
     pub bounding_box: BoundingBox,
+    /// Bounding sphere center (derived from bounding box).
+    pub bounding_sphere_center: Vector3<f32>,
+    /// Bounding sphere radius (derived from bounding box).
+    pub bounding_sphere_radius: f32,
     /// Scale factor to normalize the mesh to approximately unit size.
     pub scale: f32,
     /// Center point of the mesh for translation to origin.
@@ -457,10 +472,15 @@ impl MeshAsset {
             )
         };
 
+        // Calculate bounding sphere from bounding box
+        let (bounding_sphere_center, bounding_sphere_radius) = bounding_box.bounding_sphere();
+
         Self {
             vertices,
             indices,
             bounding_box,
+            bounding_sphere_center,
+            bounding_sphere_radius,
             scale,
             center,
             name,
@@ -692,10 +712,15 @@ pub fn load_gltf(path: &str) -> Result<MeshAsset, MeshLoadError> {
         .unwrap_or("unnamed")
         .to_string();
 
+    // Calculate bounding sphere from bounding box
+    let (bounding_sphere_center, bounding_sphere_radius) = bounding_box.bounding_sphere();
+
     Ok(MeshAsset {
         vertices: all_vertices,
         indices: all_indices,
         bounding_box,
+        bounding_sphere_center,
+        bounding_sphere_radius,
         scale,
         center,
         name,

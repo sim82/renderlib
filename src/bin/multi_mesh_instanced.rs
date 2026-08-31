@@ -14,7 +14,7 @@
 //! Uses the new renderlib framework with clean separation between
 //! GPU infrastructure and application state.
 
-use cgmath::{Matrix4, Rad, Vector3};
+use cgmath::{Matrix4, Point3, Rad, Transform, Vector3};
 use winit::event::WindowEvent;
 use winit::event_loop::EventLoop;
 use winit::keyboard::Key;
@@ -29,6 +29,11 @@ use renderlib::input::InputController;
 use renderlib::mesh::{quad_vertices_2d, MeshHandle, MeshSource, QuadVertex};
 use renderlib::player::PlayerState;
 
+/// Camera uniform data for instanced rendering
+/// This implementation uses the standard algorithm that works with
+/// both OpenGL and D3D style projection matrices.
+/// The key insight is that for a point P in world space:
+/// view_proj * P gives clip space coordinates.
 /// Camera uniform data for instanced rendering
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
@@ -81,6 +86,10 @@ struct MeshInstance {
     scale: f32,
     center: Vector3<f32>,
     position_offset: Vector3<f32>,
+
+    /// Bounding sphere data for frustum culling (in local space)
+    bounding_sphere_center: Vector3<f32>,
+    bounding_sphere_radius: f32,
 }
 
 impl MeshInstance {
@@ -89,13 +98,52 @@ impl MeshInstance {
         scale: f32,
         center: Vector3<f32>,
         position_offset: Vector3<f32>,
+        bounding_sphere_center: Vector3<f32>,
+        bounding_sphere_radius: f32,
     ) -> Self {
         Self {
             mesh_handle,
             scale,
             center,
             position_offset,
+            bounding_sphere_center,
+            bounding_sphere_radius,
         }
+    }
+
+    /// Get the world-space bounding sphere for this instance at a specific time
+    /// This accounts for the rotation that's applied in the render method
+    fn get_world_bounding_sphere(
+        &self,
+        elapsed: f32,
+        instance_index: usize,
+    ) -> (Vector3<f32>, f32) {
+        // The mesh transformation in render() is:
+        // center_translation = Matrix4::from_translation(-instance.center)
+        // scale_matrix = Matrix4::from_scale(instance.scale)
+        // rotation = Matrix4::from_angle_y(Rad(elapsed * 0.5 + instance_index as f32 * 0.7))
+        //             * Matrix4::from_angle_x(Rad(elapsed * 0.3 + instance_index as f32 * 0.4))
+        // position_translation = Matrix4::from_translation(instance.position_offset)
+        // model = position_translation * rotation * scale_matrix * center_translation
+
+        // The bounding sphere center in local mesh space is self.bounding_sphere_center
+        // After centering: local_center = bounding_sphere_center - center
+        let local_center = self.bounding_sphere_center - self.center;
+
+        // Apply scale
+        let scaled_center = local_center * self.scale;
+
+        // Apply rotation (same as in render method)
+        let rotation = Matrix4::from_angle_y(Rad(elapsed * 0.5 + instance_index as f32 * 0.7))
+            * Matrix4::from_angle_x(Rad(elapsed * 0.3 + instance_index as f32 * 0.4));
+        let rotated_center = rotation.transform_vector(scaled_center);
+
+        // Apply position
+        let world_center = self.position_offset + rotated_center;
+
+        // Apply scale to the bounding sphere radius (rotation doesn't change radius)
+        let world_radius = self.bounding_sphere_radius * self.scale;
+        (world_center, world_radius)
     }
 }
 
@@ -173,6 +221,9 @@ pub struct DeferredRenderer {
     // Lighting
     lights: [Light; renderlib::camera::MAX_LIGHTS],
     num_lights: u32,
+
+    // Frustum culling
+    visible_instances: Vec<usize>,
 }
 
 impl DeferredRenderer {
@@ -356,6 +407,8 @@ impl AppRenderer for DeferredRenderer {
                 mesh_asset.scale,
                 mesh_asset.center,
                 *position_offset,
+                mesh_asset.bounding_sphere_center,
+                mesh_asset.bounding_sphere_radius,
             ));
         }
 
@@ -533,6 +586,7 @@ impl AppRenderer for DeferredRenderer {
             input_controller: InputController::new(),
             lights,
             num_lights,
+            visible_instances: Vec::new(),
         }
     }
 
@@ -591,6 +645,86 @@ impl AppRenderer for DeferredRenderer {
         // Clone camera from AppState first to avoid borrow conflicts
         let camera = context.state().camera.clone();
 
+        // Perform frustum culling using view-space test
+        let view_matrix = camera.get_view_matrix();
+        self.visible_instances.clear();
+
+        for (index, instance) in self.mesh_instances.iter().enumerate() {
+            let (world_center, world_radius) = instance.get_world_bounding_sphere(elapsed, index);
+
+            // Transform the sphere center to view space
+            let center_view = view_matrix.transform_point(Point3::new(
+                world_center.x,
+                world_center.y,
+                world_center.z,
+            ));
+
+            // In view space:
+            // - Camera is at origin (0,0,0)
+            // - Camera looks down negative Z axis
+            // - Objects with z > 0 are BEHIND the camera
+            // - Objects with z < 0 are IN FRONT of the camera
+
+            // Check if sphere is in front of camera (not completely behind)
+            // A sphere is in front if its closest point to camera is in front:
+            // center_view.z - world_radius <= 0.0
+            // But to reduce popping, we use a conservative test: only cull if the sphere
+            // is COMPLETELY behind the camera (center + radius <= 0 would be wrong, we want center - radius > 0)
+            let completely_behind_camera = center_view.z - world_radius > 0.0;
+
+            // Check if sphere is too far away (completely beyond far plane)
+            // In view space, far plane is at z = -camera.far
+            let completely_beyond_far = center_view.z + world_radius < -camera.far;
+
+            // Check if sphere is too close (completely before near plane)
+            // In view space, near plane is at z = -camera.near
+            // Only cull if the sphere is COMPLETELY before the near plane
+            let completely_before_near = center_view.z - world_radius > -camera.near;
+
+            // If the sphere is completely outside the view frustum, skip it
+            if completely_behind_camera || completely_beyond_far || completely_before_near {
+                continue;
+            }
+
+            // Now check angular bounds in view space
+            // The frustum in view space is a pyramid with:
+            // - Left/right planes based on horizontal FOV
+            // - Top/bottom planes based on vertical FOV
+            // - Near/far planes (already checked)
+
+            // Calculate the frustum angles from the projection matrix
+            // For a perspective matrix, the diagonal elements contain the cotangent of half-angles
+            // cot(fov_y / 2) = projection[1][1]
+            // cot(fov_x / 2) = projection[0][0] / aspect (approximately)
+            // So tan(fov_x / 2) = 1.0 / projection[0][0] * aspect
+            // And tan(fov_y / 2) = 1.0 / projection[1][1]
+
+            let proj = camera.get_projection_matrix(aspect);
+            let tan_fov_y = 1.0 / proj[1][1];
+            let tan_fov_x = 1.0 / proj[0][0];
+
+            // In view space, at distance |z| from camera:
+            // - x must be within [-|z| * tan_fov_x, |z| * tan_fov_x]
+            // - y must be within [-|z| * tan_fov_y, |z| * tan_fov_y]
+            // But z is negative in view space (camera looks down -Z)
+
+            let z_abs = (-center_view.z).abs();
+            let x_bound = z_abs * tan_fov_x;
+            let y_bound = z_abs * tan_fov_y;
+
+            // Check if sphere overlaps with the frustum in x
+            let inside_x =
+                center_view.x + world_radius >= -x_bound && center_view.x - world_radius <= x_bound;
+
+            // Check if sphere overlaps with the frustum in y
+            let inside_y =
+                center_view.y + world_radius >= -y_bound && center_view.y - world_radius <= y_bound;
+
+            if inside_x && inside_y {
+                self.visible_instances.push(index);
+            }
+        }
+
         // Pre-fetch mesh resources for all instances to avoid borrow conflicts
         // Since all instances use the same mesh, we only need to fetch once
         let mesh_resource = if !self.mesh_instances.is_empty() {
@@ -632,17 +766,17 @@ impl AppRenderer for DeferredRenderer {
             bytemuck::cast_slice(&[camera_uniform]),
         );
 
-        // Update instance storage buffer with current model matrices only
-        // Using the SAME model matrix calculation as the non-instanced version
+        // Update instance storage buffer with current model matrices for visible instances only
         let instance_data: Vec<InstanceUniform> = self
-            .mesh_instances
+            .visible_instances
             .iter()
-            .enumerate()
-            .map(|(i, instance)| {
+            .map(|&instance_index| {
+                let instance = &self.mesh_instances[instance_index];
                 let center_translation = Matrix4::from_translation(-instance.center);
                 let scale_matrix = Matrix4::from_scale(instance.scale);
-                let rotation = Matrix4::from_angle_y(Rad(elapsed * 0.5 + i as f32 * 0.7))
-                    * Matrix4::from_angle_x(Rad(elapsed * 0.3 + i as f32 * 0.4));
+                let rotation =
+                    Matrix4::from_angle_y(Rad(elapsed * 0.5 + instance_index as f32 * 0.7))
+                        * Matrix4::from_angle_x(Rad(elapsed * 0.3 + instance_index as f32 * 0.4));
                 let position_translation = Matrix4::from_translation(instance.position_offset);
                 let model = position_translation * rotation * scale_matrix * center_translation;
                 InstanceUniform::new(model)
@@ -650,11 +784,13 @@ impl AppRenderer for DeferredRenderer {
             .collect();
 
         // Write instance data to storage buffer
-        queue.write_buffer(
-            &self.instance_buffer,
-            0,
-            bytemuck::cast_slice(&instance_data),
-        );
+        if !instance_data.is_empty() {
+            queue.write_buffer(
+                &self.instance_buffer,
+                0,
+                bytemuck::cast_slice(&instance_data),
+            );
+        }
 
         // Create command encoder
         let mut encoder = context
@@ -708,12 +844,15 @@ impl AppRenderer for DeferredRenderer {
                 wgpu::IndexFormat::Uint16,
             );
 
-            // Single instanced draw call for all meshes!
-            geometry_pass.draw_indexed(
-                0..mesh_resource.num_indices,
-                0,
-                0..NUM_MESH_INSTANCES as u32,
-            );
+            // Single instanced draw call for visible meshes only!
+            let visible_instance_count = self.visible_instances.len() as u32;
+            if visible_instance_count > 0 {
+                geometry_pass.draw_indexed(
+                    0..mesh_resource.num_indices,
+                    0,
+                    0..visible_instance_count,
+                );
+            }
         }
 
         // =====================================================================
