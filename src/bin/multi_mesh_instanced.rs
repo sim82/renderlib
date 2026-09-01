@@ -14,6 +14,8 @@
 //! Uses the new renderlib framework with clean separation between
 //! GPU infrastructure and application state.
 
+use std::time::Instant;
+
 use cgmath::{Matrix4, Point3, Rad, Transform, Vector3};
 use winit::event::WindowEvent;
 use winit::event_loop::EventLoop;
@@ -65,7 +67,7 @@ impl InstanceUniform {
 }
 
 /// Number of mesh instances to create
-const NUM_MESH_INSTANCES: usize = 1024 * 100;
+const NUM_MESH_INSTANCES: usize = 1024 * 500;
 
 /// Base spacing between mesh instances (in world units)
 const BASE_SPACING: f32 = 3.0;
@@ -649,6 +651,7 @@ impl AppRenderer for DeferredRenderer {
         let view_matrix = camera.get_view_matrix();
         self.visible_instances.clear();
 
+        let start = Instant::now();
         for (index, instance) in self.mesh_instances.iter().enumerate() {
             let (world_center, world_radius) = instance.get_world_bounding_sphere(elapsed, index);
 
@@ -725,6 +728,7 @@ impl AppRenderer for DeferredRenderer {
             }
         }
 
+        println!("elapsed: {:?}", start.elapsed());
         // Pre-fetch mesh resources for all instances to avoid borrow conflicts
         // Since all instances use the same mesh, we only need to fetch once
         let mesh_resource = if !self.mesh_instances.is_empty() {
