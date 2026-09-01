@@ -1,6 +1,7 @@
-// Deferred rendering geometry pass shader with instancing
+// Deferred rendering geometry pass shader with instancing for GPU culling
 // Outputs position, normal, and albedo to G-buffer
 // Uses instanced rendering with storage buffer for instance data
+// This version includes compacted indices buffer for GPU culling support
 
 // Camera uniforms (shared, binding 0)
 struct CameraUniforms {
@@ -32,12 +33,19 @@ var<uniform> camera: CameraUniforms;
 @group(0) @binding(1)
 var<storage, read> instance_buffer: array<InstanceData>;
 
+// Compacted visible indices buffer for GPU culling
+@group(0) @binding(2)
+var<storage, read> compacted_indices: array<u32>;
+
 @vertex
 fn vs_main(
     model: VertexInput,
     @builtin(instance_index) instance_index: u32,
 ) -> VertexOutput {
-    let instance = instance_buffer[instance_index];
+    // Map the indirect draw instance index to the actual instance index
+    // using the compacted indices buffer from GPU culling
+    let actual_instance_index = compacted_indices[instance_index];
+    let instance = instance_buffer[actual_instance_index];
     
     var out: VertexOutput;
     let mvp = camera.view_proj * instance.model;
