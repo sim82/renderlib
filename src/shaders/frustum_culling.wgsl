@@ -4,7 +4,6 @@
 
 struct InstanceData {
     world_center: vec3<f32>,
-    _padding: f32,
     world_radius: f32,
 };
 
@@ -31,7 +30,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     }
 
     let instance = instances[idx];
-    
+
     // Transform the sphere center to view space
     let center_view = view_matrix * vec4<f32>(instance.world_center, 1.0);
 

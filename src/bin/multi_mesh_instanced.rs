@@ -65,7 +65,7 @@ impl InstanceUniform {
 }
 
 /// Number of mesh instances to create
-const NUM_MESH_INSTANCES: usize = 1024 * 50;
+const NUM_MESH_INSTANCES: usize = 1024 * 100;
 
 /// Base spacing between mesh instances (in world units)
 const BASE_SPACING: f32 = 3.0;

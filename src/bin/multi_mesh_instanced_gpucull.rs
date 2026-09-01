@@ -65,7 +65,6 @@ impl InstanceUniform {
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct GpuInstanceData {
     world_center: [f32; 3],
-    _padding: f32,
     world_radius: f32,
 }
 
@@ -73,7 +72,6 @@ impl GpuInstanceData {
     fn new(center: Vector3<f32>, radius: f32) -> Self {
         Self {
             world_center: [center.x, center.y, center.z],
-            _padding: 0.0,
             world_radius: radius,
         }
     }
@@ -102,7 +100,8 @@ impl CullingCameraParams {
 }
 
 /// Number of mesh instances to create
-const NUM_MESH_INSTANCES: usize = 1024 * 100;
+// const NUM_MESH_INSTANCES: usize = 1024 * 100;
+const NUM_MESH_INSTANCES: usize = 100;
 
 /// Base spacing between mesh instances (in world units)
 const BASE_SPACING: f32 = 3.0;
@@ -956,6 +955,11 @@ impl AppRenderer for DeferredRenderer {
             }
         }
 
+        println!(
+            "after cull: {} {:?}",
+            self.visible_instances.len(),
+            self.visible_instances
+        );
         // Use the mesh_resource we fetched earlier
         if self.mesh_instances.is_empty() {
             return;
