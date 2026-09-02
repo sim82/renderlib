@@ -102,7 +102,7 @@ impl CullingCameraParams {
 }
 
 /// Number of mesh instances to create
-const NUM_MESH_INSTANCES: usize = 1024 * 500;
+const NUM_MESH_INSTANCES: usize = 1024 * 50;
 // const NUM_MESH_INSTANCES: usize = 100;
 
 /// Base spacing between mesh instances (in world units)
@@ -155,6 +155,10 @@ struct MeshInstance {
     /// Bounding sphere data for frustum culling (in local space)
     bounding_sphere_center: Vector3<f32>,
     bounding_sphere_radius: f32,
+
+    /// Cached world-space bounding sphere data (updated per frame)
+    cached_world_center: Vector3<f32>,
+    cached_world_radius: f32,
 }
 
 impl MeshInstance {
@@ -166,6 +170,12 @@ impl MeshInstance {
         bounding_sphere_center: Vector3<f32>,
         bounding_sphere_radius: f32,
     ) -> Self {
+        // Initialize cached world bounding sphere (will be updated per frame)
+        let local_center = bounding_sphere_center - center;
+        let scaled_center = local_center * scale;
+        let world_center = position_offset + scaled_center; // No rotation initially
+        let world_radius = bounding_sphere_radius * scale;
+
         Self {
             mesh_handle,
             scale,
@@ -173,42 +183,32 @@ impl MeshInstance {
             position_offset,
             bounding_sphere_center,
             bounding_sphere_radius,
+            cached_world_center: world_center,
+            cached_world_radius: world_radius,
         }
     }
 
-    /// Get the world-space bounding sphere for this instance at a specific time
-    /// This accounts for the rotation that's applied in the render method
-    fn get_world_bounding_sphere(
-        &self,
-        elapsed: f32,
-        instance_index: usize,
-    ) -> (Vector3<f32>, f32) {
-        // The mesh transformation in render() is:
-        // center_translation = Matrix4::from_translation(-instance.center)
-        // scale_matrix = Matrix4::from_scale(instance.scale)
-        // rotation = Matrix4::from_angle_y(Rad(elapsed * 0.5 + instance_index as f32 * 0.7))
-        //             * Matrix4::from_angle_x(Rad(elapsed * 0.3 + instance_index as f32 * 0.4))
-        // position_translation = Matrix4::from_translation(instance.position_offset)
-        // model = position_translation * rotation * scale_matrix * center_translation
-
-        // The bounding sphere center in local mesh space is self.bounding_sphere_center
-        // After centering: local_center = bounding_sphere_center - center
+    /// Update the cached world-space bounding sphere based on rotation
+    fn update_world_bounding_sphere(&mut self, rotation: Matrix4<f32>) {
+        // Calculate local center relative to mesh center
         let local_center = self.bounding_sphere_center - self.center;
 
         // Apply scale
         let scaled_center = local_center * self.scale;
 
-        // Apply rotation (same as in render method)
-        let rotation = Matrix4::from_angle_y(Rad(elapsed * 0.5 + instance_index as f32 * 0.7))
-            * Matrix4::from_angle_x(Rad(elapsed * 0.3 + instance_index as f32 * 0.4));
+        // Apply rotation
         let rotated_center = rotation.transform_vector(scaled_center);
 
-        // Apply position
-        let world_center = self.position_offset + rotated_center;
+        // Apply position offset
+        self.cached_world_center = self.position_offset + rotated_center;
 
-        // Apply scale to the bounding sphere radius (rotation doesn't change radius)
-        let world_radius = self.bounding_sphere_radius * self.scale;
-        (world_center, world_radius)
+        // Radius is scale-invariant to rotation, only affected by scale
+        self.cached_world_radius = self.bounding_sphere_radius * self.scale;
+    }
+
+    /// Get the precomputed world-space bounding sphere
+    fn get_world_bounding_sphere(&self) -> (Vector3<f32>, f32) {
+        (self.cached_world_center, self.cached_world_radius)
     }
 }
 
@@ -992,24 +992,44 @@ impl AppRenderer for DeferredRenderer {
         // 2. Dispatch indirect args generation compute shader
         // 3. Use GPU-generated indirect draw args directly in geometry pass
 
-        // Step 1: Compute world-space bounding spheres for all instances on CPU
-        let instance_data: Vec<GpuInstanceData> = self
-            .mesh_instances
-            .iter()
-            .enumerate()
-            .map(|(i, instance)| {
-                let (world_center, world_radius) = instance.get_world_bounding_sphere(elapsed, i);
-                GpuInstanceData::new(world_center, world_radius)
-            })
-            .collect();
+        // Step 1: Precompute rotation matrices for all instances and update cached world bounding spheres
+
+        let instance_rotations = if self.first_iter {
+            let base_rotation_y = elapsed * 0.5;
+            let base_rotation_x = elapsed * 0.3;
+            let instance_rotations: Vec<Matrix4<f32>> = (0..NUM_MESH_INSTANCES)
+                .map(|i| {
+                    Matrix4::from_angle_y(Rad(base_rotation_y + i as f32 * 0.7))
+                        * Matrix4::from_angle_x(Rad(base_rotation_x + i as f32 * 0.4))
+                })
+                .collect();
+
+            // Update cached world bounding spheres using precomputed rotations
+            for (i, instance) in self.mesh_instances.iter_mut().enumerate() {
+                instance.update_world_bounding_sphere(instance_rotations[i]);
+            }
+            // Step 2: Compute world-space bounding spheres for all instances on CPU (now using cached values)
+            let instance_data: Vec<GpuInstanceData> = self
+                .mesh_instances
+                .iter()
+                .map(|instance| {
+                    let (world_center, world_radius) = instance.get_world_bounding_sphere();
+                    GpuInstanceData::new(world_center, world_radius)
+                })
+                .collect();
+
+            // Step 2: Upload instance data to GPU buffer
+            queue.write_buffer(
+                &self.instance_data_buffer,
+                0,
+                bytemuck::cast_slice(&instance_data),
+            );
+            Some(instance_rotations)
+        } else {
+            None
+        };
 
         pt.checkpoint("GPU Instance date");
-        // Step 2: Upload instance data to GPU buffer
-        queue.write_buffer(
-            &self.instance_data_buffer,
-            0,
-            bytemuck::cast_slice(&instance_data),
-        );
 
         // Step 3: Upload view matrix and camera params to GPU
         let view_matrix = camera.get_view_matrix();
@@ -1112,9 +1132,9 @@ impl AppRenderer for DeferredRenderer {
             bytemuck::cast_slice(&[camera_uniform]),
         );
 
-        if self.first_iter {
+        if let Some(instance_rotations) = instance_rotations.as_ref() {
             // NEW: Update instance storage buffer with current model matrices for ALL instances
-            // The GPU will handle culling, so we need all instance data available
+            // Reuse the precomputed rotation matrices
             let instance_data: Vec<InstanceUniform> = self
                 .mesh_instances
                 .iter()
@@ -1122,11 +1142,7 @@ impl AppRenderer for DeferredRenderer {
                 .map(|(instance_index, instance)| {
                     let center_translation = Matrix4::from_translation(-instance.center);
                     let scale_matrix = Matrix4::from_scale(instance.scale);
-                    let rotation =
-                        Matrix4::from_angle_y(Rad(elapsed * 0.5 + instance_index as f32 * 0.7))
-                            * Matrix4::from_angle_x(Rad(
-                                elapsed * 0.3 + instance_index as f32 * 0.4
-                            ));
+                    let rotation = instance_rotations[instance_index];
                     let position_translation = Matrix4::from_translation(instance.position_offset);
                     let model = position_translation * rotation * scale_matrix * center_translation;
                     InstanceUniform::new(model)
@@ -1140,7 +1156,7 @@ impl AppRenderer for DeferredRenderer {
                 bytemuck::cast_slice(&instance_data),
             );
 
-            // self.first_iter = false;
+            self.first_iter = false;
         }
         pt.checkpoint("instance data");
 
