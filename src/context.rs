@@ -8,6 +8,8 @@
 //! - Access to application state via [`AppState`]
 //! - Access to the current frame's texture view
 
+use std::time::Instant;
+
 use crate::device::GraphicsDevice;
 use crate::state::AppState;
 
@@ -120,5 +122,69 @@ impl<'a> RenderContext<'a> {
     /// Returns the surface texture format.
     pub fn surface_format(&self) -> wgpu::TextureFormat {
         self.device.surface_format()
+    }
+}
+
+/// Profiling timer for measuring execution intervals.
+///
+/// `Proftime` provides a simple way to measure and log execution times between
+/// checkpoints. When dropped, it automatically prints the duration of each
+/// interval and the total time.
+///
+/// # Example
+///
+/// ```no_run
+/// use renderlib::context::Proftime;
+///
+/// fn my_function() {
+///     let mut pt = Proftime::new();
+///     // Do some work
+///     pt.checkpoint("first operation");
+///     // Do more work
+///     pt.checkpoint("second operation");
+///     // Proftime will automatically print timing info when it goes out of scope
+/// }
+/// ```
+#[derive(Debug)]
+pub struct Proftime {
+    /// Start time of the profiling session
+    pub start: Instant,
+    /// List of named checkpoints with their timestamps
+    pub interval: Vec<(String, Instant)>,
+}
+
+impl Proftime {
+    /// Creates a new `Proftime` instance.
+    pub fn new() -> Self {
+        Self {
+            start: Instant::now(),
+            interval: Vec::new(),
+        }
+    }
+
+    /// Records a checkpoint with the given name.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - A string describing the checkpoint
+    pub fn checkpoint(&mut self, name: &str) {
+        self.interval.push((name.to_string(), Instant::now()));
+    }
+}
+
+impl Default for Proftime {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for Proftime {
+    fn drop(&mut self) {
+        let mut last = self.start;
+        for (name, time) in &self.interval {
+            println!("{}: {:?}", name, time.duration_since(last));
+            last = *time;
+        }
+        println!("total: {:?}", last.duration_since(self.start));
     }
 }

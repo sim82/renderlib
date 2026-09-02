@@ -15,8 +15,6 @@
 //! - Indirect drawing
 //! - Storage buffers and atomic operations
 
-use std::time::Instant;
-
 use cgmath::{Matrix4, Rad, Transform, Vector3};
 use winit::event::WindowEvent;
 use winit::event_loop::EventLoop;
@@ -24,7 +22,7 @@ use winit::keyboard::Key;
 
 use renderlib::app::{AppRenderer, Application};
 use renderlib::camera::{Light, LightingUniform};
-use renderlib::context::RenderContext;
+use renderlib::context::{Proftime, RenderContext};
 use renderlib::deferred::GBuffer;
 use renderlib::device_helpers::*;
 use renderlib::geometry::PosColorNormalVertex;
@@ -116,32 +114,7 @@ const INDIRECT_ARGS_SHADER_PATH: &str = "src/shaders/indirect_args_generation.wg
 
 /// Default mesh file path.
 const DEFAULT_MESH_PATH: &str = "assets/duck.glb";
-struct Proftime {
-    pub start: Instant,
-    pub interval: Vec<(String, Instant)>,
-}
 
-impl Proftime {
-    pub fn new() -> Self {
-        Self {
-            start: Instant::now(),
-            interval: Vec::new(),
-        }
-    }
-    pub fn checkpoint(&mut self, name: &str) {
-        self.interval.push((name.to_string(), Instant::now()));
-    }
-}
-impl Drop for Proftime {
-    fn drop(&mut self) {
-        let mut last = self.start;
-        for (name, time) in &self.interval {
-            println!("{}: {:?}", name, time.duration_since(last));
-            last = *time;
-        }
-        println!("total: {:?}", last.duration_since(self.start));
-    }
-}
 /// Per-mesh instance data encapsulating CPU and GPU resources.
 struct MeshInstance {
     /// Handle to the mesh data (shared between instances of the same mesh)
