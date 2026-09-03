@@ -310,6 +310,86 @@ impl DeferredRenderer {
     }
 }
 
+impl DeferredRenderer {
+    // =========================================================================
+    // Render Phase Helper Methods
+    // =========================================================================
+
+    /// Updates state for the frame: time, camera, and player input.
+    fn update_frame_state(&mut self, context: &mut RenderContext<'_>) {
+        // Update time state and get delta time
+        context.state().time.update();
+        let delta_time = context.state().time.delta_time as f32;
+
+        // Update camera from player input - do this first to avoid borrow conflicts
+        let player_input = self.input_controller.get_player_input();
+        self.player.update(&player_input, delta_time);
+        self.player.apply_to_camera(&mut context.state().camera);
+    }
+
+    /// Handles shader reloads if requested.
+    fn handle_shader_reloads(&mut self, device: &wgpu::Device) {
+        if self.should_reload_geometry {
+            eprintln!("Reloading geometry shader...");
+            if let Err(e) = self.reload_geometry_shader(device) {
+                eprintln!("Geometry shader reload failed: {}", e);
+            } else {
+                eprintln!("Geometry shader reloaded successfully!");
+                self.should_reload_geometry = false;
+            }
+        }
+
+        if self.should_reload_lighting {
+            eprintln!("Reloading lighting shader...");
+            if let Err(e) = self.reload_lighting_shader(device) {
+                eprintln!("Lighting shader reload failed: {}", e);
+            } else {
+                eprintln!("Lighting shader reloaded successfully!");
+                self.should_reload_lighting = false;
+            }
+        }
+    }
+
+    /// Handles resizing of G-buffer and depth texture.
+    fn handle_resizing(&mut self, size: winit::dpi::PhysicalSize<u32>, device: &wgpu::Device) {
+        // Resize G-buffer and depth texture if needed
+        if self.gbuffer.width != size.width || self.gbuffer.height != size.height {
+            self.gbuffer.resize(device, size.width, size.height);
+
+            // Recreate depth texture with new size
+            let (depth_texture, depth_texture_view) = create_depth_texture(
+                device,
+                size.width,
+                size.height,
+                Some("Instanced Deferred Depth Texture"),
+            );
+            self.depth_texture = depth_texture;
+            self.depth_texture_view = depth_texture_view;
+        }
+    }
+
+    // =========================================================================
+    // Initialization Helper Methods
+    // =========================================================================
+
+    /// Creates the lighting system with default lights.
+    fn create_lighting_system() -> ([Light; renderlib::camera::MAX_LIGHTS], u32) {
+        let mut lights = [Light::default(); renderlib::camera::MAX_LIGHTS];
+        lights[0] = Light::new([2.0, 3.0, 4.0], [1.0, 1.0, 1.0]);
+        lights[1] = Light::new([-3.0, 2.0, 2.0], [1.0, 0.0, 0.0]);
+        lights[2] = Light::new([0.0, -2.0, 3.0], [0.0, 0.0, 1.0]);
+        lights[3] = Light::new([0.0, 2.0, -3.0], [0.0, 1.0, 0.0]);
+        let num_lights = 4u32;
+
+        (lights, num_lights)
+    }
+
+    /// Creates the player and input systems.
+    fn create_player_system() -> (PlayerState, InputController) {
+        (PlayerState::new(), InputController::new())
+    }
+}
+
 impl AppRenderer for DeferredRenderer {
     async fn init(mut context: RenderContext<'_>) -> Self {
         let size = context.size();
@@ -446,14 +526,8 @@ impl AppRenderer for DeferredRenderer {
         )
         .expect("Failed to create geometry pipeline");
 
-        // Create multiple lights for the scene
-        let mut lights: [Light; renderlib::camera::MAX_LIGHTS] =
-            [Light::default(); renderlib::camera::MAX_LIGHTS];
-        lights[0] = Light::new([2.0, 3.0, 4.0], [1.0, 1.0, 1.0]);
-        lights[1] = Light::new([-3.0, 2.0, 2.0], [1.0, 0.0, 0.0]);
-        lights[2] = Light::new([0.0, -2.0, 3.0], [0.0, 0.0, 1.0]);
-        lights[3] = Light::new([0.0, 2.0, -3.0], [0.0, 1.0, 0.0]);
-        let num_lights = 4u32;
+        // Create lighting system
+        let (lights, num_lights) = Self::create_lighting_system();
 
         // Create lighting pass uniform buffer
         let lighting_uniform_init =
@@ -574,8 +648,8 @@ impl AppRenderer for DeferredRenderer {
             surface_format: context.surface_format(),
             should_reload_geometry: false,
             should_reload_lighting: false,
-            player: PlayerState::new(),
-            input_controller: InputController::new(),
+            player: Self::create_player_system().0,
+            input_controller: Self::create_player_system().1,
             lights,
             num_lights,
             // GPU Culling system
@@ -590,16 +664,11 @@ impl AppRenderer for DeferredRenderer {
 
     fn render(&mut self, mut context: RenderContext<'_>) {
         let mut pt = Proftime::new();
-        // Update time state and get delta time
-        context.state().time.update();
-        let delta_time = context.state().time.delta_time as f32;
 
-        // Update camera from player input - do this first to avoid borrow conflicts
-        let player_input = self.input_controller.get_player_input();
-        self.player.update(&player_input, delta_time);
-        self.player.apply_to_camera(&mut context.state().camera);
+        // Phase 1: Update frame state
+        self.update_frame_state(&mut context);
 
-        // Clone camera and get size before borrowing context for device/queue
+        // Get camera and size after state updates
         let camera = context.state().camera.clone();
         let size = context.size();
         let elapsed = context.state().time.total_time as f32;
@@ -618,43 +687,16 @@ impl AppRenderer for DeferredRenderer {
         let mesh_resource = mesh_resource.clone();
 
         pt.checkpoint("pre-fetch mesh resources");
+
         // Get device reference after state operations
         let device = context.wgpu_device();
         let queue = context.wgpu_queue();
 
-        // Handle shader reload
-        if self.should_reload_geometry {
-            eprintln!("Reloading geometry shader...");
-            if let Err(e) = self.reload_geometry_shader(device) {
-                eprintln!("Geometry shader reload failed: {}", e);
-            } else {
-                eprintln!("Geometry shader reloaded successfully!");
-            }
-        }
+        // Phase 2: Handle shader reloads
+        self.handle_shader_reloads(device);
 
-        if self.should_reload_lighting {
-            eprintln!("Reloading lighting shader...");
-            if let Err(e) = self.reload_lighting_shader(device) {
-                eprintln!("Lighting shader reload failed: {}", e);
-            } else {
-                eprintln!("Lighting shader reloaded successfully!");
-            }
-        }
-
-        // Resize G-buffer and depth texture if needed
-        if self.gbuffer.width != size.width || self.gbuffer.height != size.height {
-            self.gbuffer.resize(device, size.width, size.height);
-
-            // Recreate depth texture with new size
-            let (depth_texture, depth_texture_view) = create_depth_texture(
-                device,
-                size.width,
-                size.height,
-                Some("Instanced Deferred Depth Texture"),
-            );
-            self.depth_texture = depth_texture;
-            self.depth_texture_view = depth_texture_view;
-        }
+        // Phase 3: Handle resizing
+        self.handle_resizing(size, device);
 
         pt.checkpoint("Setup");
 
