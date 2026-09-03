@@ -21,7 +21,7 @@ use winit::event_loop::EventLoop;
 use winit::keyboard::Key;
 
 use renderlib::app::{AppRenderer, Application};
-use renderlib::camera::{Light, LightingUniform};
+
 use renderlib::context::{Proftime, RenderContext};
 use renderlib::deferred::GBuffer;
 use renderlib::device_helpers::*;
@@ -29,7 +29,8 @@ use renderlib::geometry::PosColorNormalVertex;
 use renderlib::gpu_culling::{GpuCullingSystem, GpuInstanceData};
 use renderlib::indirect_drawing::IndirectArgsGenerator;
 use renderlib::input::InputController;
-use renderlib::mesh::{quad_vertices_2d, MeshHandle, MeshSource, QuadVertex};
+use renderlib::lighting::LightingSystem;
+use renderlib::mesh::{MeshHandle, MeshSource};
 use renderlib::player::PlayerState;
 use renderlib::uniforms::{CameraUniform, InstanceUniform};
 
@@ -136,13 +137,8 @@ pub struct DeferredRenderer {
     // Instancing resources
     instance_index_buffer: wgpu::Buffer,
 
-    // Lighting pass resources
-    quad_vertex_buffer: wgpu::Buffer,
-    lighting_uniform_buffer: wgpu::Buffer,
-    lighting_uniform_bind_group_layout: wgpu::BindGroupLayout,
-    lighting_uniform_bind_group: wgpu::BindGroup,
-    lighting_pipeline: wgpu::RenderPipeline,
-    lighting_shader_path: String,
+    // Lighting system
+    lighting_system: LightingSystem,
 
     // Depth buffer for geometry pass
     depth_texture: wgpu::Texture,
@@ -163,10 +159,6 @@ pub struct DeferredRenderer {
 
     // Input controller
     input_controller: InputController,
-
-    // Lighting
-    lights: [Light; renderlib::camera::MAX_LIGHTS],
-    num_lights: u32,
 
     // GPU Frustum Culling system
     gpu_culling: GpuCullingSystem,
@@ -241,46 +233,6 @@ impl DeferredRenderer {
         Ok(pipeline)
     }
 
-    /// Create the lighting pass pipeline.
-    fn create_lighting_pipeline(
-        device: &wgpu::Device,
-        gbuffer_bind_group_layout: &wgpu::BindGroupLayout,
-        lighting_uniform_bind_group_layout: &wgpu::BindGroupLayout,
-        surface_format: wgpu::TextureFormat,
-        shader_src: &str,
-    ) -> Result<wgpu::RenderPipeline, String> {
-        let shader_module =
-            create_shader_module(device, Some("Deferred Lighting Shader"), shader_src);
-
-        let pipeline_layout = create_pipeline_layout(
-            device,
-            Some("Deferred Lighting Pipeline Layout"),
-            &[
-                Some(gbuffer_bind_group_layout),
-                Some(lighting_uniform_bind_group_layout),
-            ],
-        );
-
-        let pipeline = RenderPipelineBuilder::new(device)
-            .with_label(Some("Deferred Lighting Pipeline"))
-            .with_layout(Some(&pipeline_layout))
-            .with_shader_module(&shader_module)
-            .with_vertex_entry("vs_main")
-            .with_fragment_entry("fs_main")
-            .with_vertex_buffers(&[Some(QuadVertex::desc())])
-            .with_color_formats(&[surface_format.add_srgb_suffix()])
-            .with_primitive(wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,
-                ..Default::default()
-            })
-            .build();
-
-        Ok(pipeline)
-    }
-
     /// Reload geometry shader.
     fn reload_geometry_shader(&mut self, device: &wgpu::Device) -> Result<(), String> {
         let shader_src = load_shader_source(&self.geometry_shader_path)?;
@@ -292,20 +244,6 @@ impl DeferredRenderer {
             &shader_src,
         )?;
         self.should_reload_geometry = false;
-        Ok(())
-    }
-
-    /// Reload lighting shader.
-    fn reload_lighting_shader(&mut self, device: &wgpu::Device) -> Result<(), String> {
-        let shader_src = load_shader_source(&self.lighting_shader_path)?;
-        self.lighting_pipeline = Self::create_lighting_pipeline(
-            device,
-            &self.gbuffer.bind_group_layout,
-            &self.lighting_uniform_bind_group_layout,
-            self.surface_format,
-            &shader_src,
-        )?;
-        self.should_reload_lighting = false;
         Ok(())
     }
 }
@@ -341,7 +279,10 @@ impl DeferredRenderer {
 
         if self.should_reload_lighting {
             eprintln!("Reloading lighting shader...");
-            if let Err(e) = self.reload_lighting_shader(device) {
+            if let Err(e) = self
+                .lighting_system
+                .reload_shader(device, &self.gbuffer.bind_group_layout)
+            {
                 eprintln!("Lighting shader reload failed: {}", e);
             } else {
                 eprintln!("Lighting shader reloaded successfully!");
@@ -372,21 +313,104 @@ impl DeferredRenderer {
     // Initialization Helper Methods
     // =========================================================================
 
-    /// Creates the lighting system with default lights.
-    fn create_lighting_system() -> ([Light; renderlib::camera::MAX_LIGHTS], u32) {
-        let mut lights = [Light::default(); renderlib::camera::MAX_LIGHTS];
-        lights[0] = Light::new([2.0, 3.0, 4.0], [1.0, 1.0, 1.0]);
-        lights[1] = Light::new([-3.0, 2.0, 2.0], [1.0, 0.0, 0.0]);
-        lights[2] = Light::new([0.0, -2.0, 3.0], [0.0, 0.0, 1.0]);
-        lights[3] = Light::new([0.0, 2.0, -3.0], [0.0, 1.0, 0.0]);
-        let num_lights = 4u32;
-
-        (lights, num_lights)
-    }
-
     /// Creates the player and input systems.
     fn create_player_system() -> (PlayerState, InputController) {
         (PlayerState::new(), InputController::new())
+    }
+
+    // =========================================================================
+    // Render Pass Methods
+    // =========================================================================
+
+    /// Renders the geometry pass with instanced drawing.
+    fn render_geometry_pass(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        mesh_resource: &renderlib::mesh::MeshResource,
+        camera: &renderlib::camera::Camera,
+        aspect: f32,
+        instance_rotations: Option<&Vec<Matrix4<f32>>>,
+        queue: &wgpu::Queue,
+        pt: &mut Proftime,
+    ) {
+        // Update camera uniform buffer
+        let camera_view_proj = camera.get_view_projection_matrix(aspect);
+        let camera_uniform = CameraUniform::new(camera_view_proj);
+        queue.write_buffer(
+            &self.camera_uniform_buffer,
+            0,
+            bytemuck::cast_slice(&[camera_uniform]),
+        );
+
+        // Update instance data if rotations available (first iteration)
+        if let Some(instance_rotations) = instance_rotations {
+            // Update instance storage buffer with current model matrices for ALL instances
+            // Reuse the precomputed rotation matrices
+            let instance_data: Vec<InstanceUniform> = self
+                .mesh_instances
+                .iter()
+                .enumerate()
+                .map(|(instance_index, instance)| {
+                    let center_translation = Matrix4::from_translation(-instance.center);
+                    let scale_matrix = Matrix4::from_scale(instance.scale);
+                    let rotation = instance_rotations[instance_index];
+                    let position_translation = Matrix4::from_translation(instance.position_offset);
+                    let model = position_translation * rotation * scale_matrix * center_translation;
+                    InstanceUniform::new(model)
+                })
+                .collect();
+
+            // Write instance data to storage buffer for all instances
+            queue.write_buffer(
+                &self.instance_buffer,
+                0,
+                bytemuck::cast_slice(&instance_data),
+            );
+
+            self.first_iter = false;
+        }
+        pt.checkpoint("instance data");
+
+        // =====================================================================
+        // GEOMETRY PASS: Render all mesh instances to G-buffer with instancing
+        // =====================================================================
+        {
+            let mut geometry_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Geometry Pass"),
+                color_attachments: &self.gbuffer.color_attachments(),
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth_texture_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+
+            // Set pipeline and bind groups
+            geometry_pass.set_pipeline(&self.geometry_pipeline);
+            geometry_pass.set_bind_group(0, &self.geometry_bind_group, &[]); // Camera + instance uniforms
+
+            // Set vertex buffers
+            geometry_pass.set_vertex_buffer(0, mesh_resource.vertex_buffer.slice(..));
+            geometry_pass.set_vertex_buffer(1, self.instance_index_buffer.slice(..));
+
+            // Set index buffer
+            geometry_pass.set_index_buffer(
+                mesh_resource.index_buffer.slice(..),
+                wgpu::IndexFormat::Uint16,
+            );
+
+            // Draw using GPU-generated indirect args
+            // The indirect args were generated by the GPU in the previous compute passes
+            geometry_pass.draw_indexed_indirect(&self.indirect_draw_buffer, 0);
+        }
+
+        pt.checkpoint("Geometry Pass");
     }
 }
 
@@ -494,16 +518,6 @@ impl AppRenderer for DeferredRenderer {
             load_shader_source("src/shaders/deferred_geometry.wgsl")
                 .expect("Failed to load geometry shader")
         });
-        let lighting_shader_src =
-            load_shader_source(LIGHTING_SHADER_PATH).expect("Failed to load lighting shader");
-
-        // Create quad buffer for lighting pass
-        let quad_vertex_buffer = create_buffer_from_slice(
-            device,
-            Some("Quad Vertex Buffer"),
-            quad_vertices_2d(),
-            wgpu::BufferUsages::VERTEX,
-        );
 
         // Create G-buffer from framework
         let gbuffer = GBuffer::new(device, size.width, size.height, Some("Deferred"));
@@ -527,40 +541,13 @@ impl AppRenderer for DeferredRenderer {
         .expect("Failed to create geometry pipeline");
 
         // Create lighting system
-        let (lights, num_lights) = Self::create_lighting_system();
-
-        // Create lighting pass uniform buffer
-        let lighting_uniform_init =
-            LightingUniform::new_with_lights(&camera, &lights[..num_lights as usize]);
-        let lighting_uniform_buffer = create_buffer(
-            device,
-            Some("Lighting Uniform Buffer"),
-            &lighting_uniform_init,
-            wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        );
-
-        // Create lighting uniform bind group layout and bind group using framework helpers
-        let lighting_uniform_bind_group_layout = BindGroupLayoutBuilder::new(device)
-            .with_label(Some("Lighting Uniform Bind Group Layout"))
-            .with_uniform_buffer(wgpu::ShaderStages::FRAGMENT, None)
-            .build();
-
-        let lighting_uniform_bind_group = create_bind_group_auto(
-            device,
-            Some("Lighting Uniform Bind Group"),
-            &lighting_uniform_bind_group_layout,
-            &[lighting_uniform_buffer.as_entire_binding()],
-        );
-
-        // Create lighting pipeline
-        let lighting_pipeline = Self::create_lighting_pipeline(
+        let lighting_system = LightingSystem::new(
             device,
             &gbuffer.bind_group_layout,
-            &lighting_uniform_bind_group_layout,
             context.surface_format(),
-            &lighting_shader_src,
+            LIGHTING_SHADER_PATH,
         )
-        .expect("Failed to create lighting pipeline");
+        .expect("Failed to create lighting system");
 
         // =====================================================================
         // GPU Frustum Culling Setup
@@ -636,12 +623,6 @@ impl AppRenderer for DeferredRenderer {
             geometry_pipeline,
             geometry_shader_path: GEOMETRY_SHADER_PATH.to_string(),
             instance_index_buffer,
-            quad_vertex_buffer,
-            lighting_uniform_buffer,
-            lighting_uniform_bind_group_layout,
-            lighting_uniform_bind_group,
-            lighting_pipeline,
-            lighting_shader_path: LIGHTING_SHADER_PATH.to_string(),
             depth_texture,
             depth_texture_view,
             gbuffer,
@@ -650,8 +631,7 @@ impl AppRenderer for DeferredRenderer {
             should_reload_lighting: false,
             player: Self::create_player_system().0,
             input_controller: Self::create_player_system().1,
-            lights,
-            num_lights,
+            lighting_system,
             // GPU Culling system
             gpu_culling,
             indirect_draw_buffer,
@@ -777,14 +757,8 @@ impl AppRenderer for DeferredRenderer {
             return;
         }
 
-        // Create lighting uniform buffer (same for all instances)
-        let lighting_uniform =
-            LightingUniform::new_with_lights(&camera, &self.lights[..self.num_lights as usize]);
-        queue.write_buffer(
-            &self.lighting_uniform_buffer,
-            0,
-            bytemuck::cast_slice(&[lighting_uniform]),
-        );
+        // Update lighting uniforms
+        self.lighting_system.update_uniforms(queue, &camera);
 
         // Get current texture view from context
         let texture_view = match context.get_texture_view() {
@@ -792,138 +766,26 @@ impl AppRenderer for DeferredRenderer {
             None => return,
         };
 
-        // Update camera uniform buffer
-        let camera_view_proj = camera.get_view_projection_matrix(aspect);
-        let camera_uniform = CameraUniform::new(camera_view_proj);
-        queue.write_buffer(
-            &self.camera_uniform_buffer,
-            0,
-            bytemuck::cast_slice(&[camera_uniform]),
-        );
-
-        if let Some(instance_rotations) = instance_rotations.as_ref() {
-            // NEW: Update instance storage buffer with current model matrices for ALL instances
-            // Reuse the precomputed rotation matrices
-            let instance_data: Vec<InstanceUniform> = self
-                .mesh_instances
-                .iter()
-                .enumerate()
-                .map(|(instance_index, instance)| {
-                    let center_translation = Matrix4::from_translation(-instance.center);
-                    let scale_matrix = Matrix4::from_scale(instance.scale);
-                    let rotation = instance_rotations[instance_index];
-                    let position_translation = Matrix4::from_translation(instance.position_offset);
-                    let model = position_translation * rotation * scale_matrix * center_translation;
-                    InstanceUniform::new(model)
-                })
-                .collect();
-
-            // Write instance data to storage buffer for all instances
-            queue.write_buffer(
-                &self.instance_buffer,
-                0,
-                bytemuck::cast_slice(&instance_data),
-            );
-
-            self.first_iter = false;
-        }
-        pt.checkpoint("instance data");
-
-        // =====================================================================
-        // INDIRECT DRAW ARGUMENTS
-        // =====================================================================
-        // NEW: The indirect draw arguments are now generated by the GPU,
-        // so we don't need to create them on the CPU anymore
-
-        // Create command encoder for rendering
+        // Phase 4: Render geometry pass
         let mut encoder = context
             .wgpu_device()
             .create_command_encoder(&Default::default());
+        self.render_geometry_pass(
+            &mut encoder,
+            &mesh_resource,
+            &camera,
+            aspect,
+            instance_rotations.as_ref(),
+            queue,
+            &mut pt,
+        );
 
-        // =====================================================================
-        // GEOMETRY PASS: Render all mesh instances to G-buffer with instancing
-        // =====================================================================
-        {
-            let mut geometry_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Geometry Pass"),
-                color_attachments: &self.gbuffer.color_attachments(),
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.depth_texture_view,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
-                        store: wgpu::StoreOp::Store,
-                    }),
-                    stencil_ops: None,
-                }),
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-
-            // Set pipeline and bind groups
-            geometry_pass.set_pipeline(&self.geometry_pipeline);
-            geometry_pass.set_bind_group(0, &self.geometry_bind_group, &[]); // Camera + instance uniforms
-
-            // Set vertex buffers
-            geometry_pass.set_vertex_buffer(0, mesh_resource.vertex_buffer.slice(..));
-            geometry_pass.set_vertex_buffer(1, self.instance_index_buffer.slice(..));
-
-            // Set index buffer
-            geometry_pass.set_index_buffer(
-                mesh_resource.index_buffer.slice(..),
-                wgpu::IndexFormat::Uint16,
-            );
-
-            // NEW: Draw using GPU-generated indirect args
-            // The indirect args were generated by the GPU in the previous compute passes
-            geometry_pass.draw_indexed_indirect(&self.indirect_draw_buffer, 0);
-        }
-
-        pt.checkpoint("Geometry Pass");
-
-        // =====================================================================
-        // LIGHTING PASS: Full-screen quad that reads G-buffer and computes lighting
-        // =====================================================================
-        {
-            let gbuffer_bind_group = create_bind_group_auto(
-                context.wgpu_device(),
-                Some("GBuffer Bind Group"),
-                &self.gbuffer.bind_group_layout,
-                &[
-                    wgpu::BindingResource::TextureView(&self.gbuffer.position_view),
-                    wgpu::BindingResource::TextureView(&self.gbuffer.normal_view),
-                    wgpu::BindingResource::TextureView(&self.gbuffer.albedo_view),
-                    wgpu::BindingResource::Sampler(&self.gbuffer.sampler),
-                ],
-            );
-
-            let mut lighting_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Lighting Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &texture_view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-
-            // Draw full-screen quad
-            lighting_pass.set_pipeline(&self.lighting_pipeline);
-            lighting_pass.set_bind_group(0, &gbuffer_bind_group, &[]);
-            lighting_pass.set_bind_group(1, &self.lighting_uniform_bind_group, &[]);
-            lighting_pass.set_vertex_buffer(0, self.quad_vertex_buffer.slice(..));
-            lighting_pass.draw(0..6, 0..1);
-        }
-
+        // Phase 5: Render lighting pass
+        self.lighting_system
+            .render_pass(&mut encoder, device, &self.gbuffer, &texture_view);
         pt.checkpoint("Deferred Rendering");
-        // Submit for rendering (presentation handled by framework)
+
+        // Phase 6: Submit commands
         context.wgpu_queue().submit([encoder.finish()]);
         pt.checkpoint("Submit");
     }

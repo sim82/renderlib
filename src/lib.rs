@@ -81,6 +81,7 @@ pub mod geometry;
 pub mod gpu_culling;
 pub mod indirect_drawing;
 pub mod input;
+pub mod lighting;
 pub mod mesh;
 pub mod player;
 pub mod state;
