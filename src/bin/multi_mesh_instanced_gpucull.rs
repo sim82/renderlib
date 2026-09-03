@@ -26,78 +26,12 @@ use renderlib::context::{Proftime, RenderContext};
 use renderlib::deferred::GBuffer;
 use renderlib::device_helpers::*;
 use renderlib::geometry::PosColorNormalVertex;
+use renderlib::gpu_culling::{GpuCullingSystem, GpuInstanceData};
+use renderlib::indirect_drawing::IndirectArgsGenerator;
 use renderlib::input::InputController;
 use renderlib::mesh::{quad_vertices_2d, MeshHandle, MeshSource, QuadVertex};
 use renderlib::player::PlayerState;
-
-/// Camera uniform data for instanced rendering
-#[repr(C)]
-#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-struct CameraUniform {
-    view_proj: [[f32; 4]; 4],
-}
-
-impl CameraUniform {
-    fn new(view_proj: Matrix4<f32>) -> Self {
-        Self {
-            view_proj: view_proj.into(),
-        }
-    }
-}
-
-/// Instance uniform data for instanced rendering
-#[repr(C)]
-#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-struct InstanceUniform {
-    model: [[f32; 4]; 4],
-}
-
-impl InstanceUniform {
-    fn new(model: Matrix4<f32>) -> Self {
-        Self {
-            model: model.into(),
-        }
-    }
-}
-
-/// GPU instance data for frustum culling
-#[repr(C)]
-#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-struct GpuInstanceData {
-    world_center: [f32; 3],
-    world_radius: f32,
-}
-
-impl GpuInstanceData {
-    fn new(center: Vector3<f32>, radius: f32) -> Self {
-        Self {
-            world_center: [center.x, center.y, center.z],
-            world_radius: radius,
-        }
-    }
-}
-
-/// Camera parameters for frustum culling compute shader
-#[repr(C)]
-#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-struct CullingCameraParams {
-    near: f32,
-    far: f32,
-    tan_fov_x: f32,
-    tan_fov_y: f32,
-}
-
-impl CullingCameraParams {
-    fn new(camera: &renderlib::camera::Camera, aspect: f32) -> Self {
-        let proj = camera.get_projection_matrix(aspect);
-        Self {
-            near: camera.near,
-            far: camera.far,
-            tan_fov_x: 1.0 / proj[0][0],
-            tan_fov_y: 1.0 / proj[1][1],
-        }
-    }
-}
+use renderlib::uniforms::{CameraUniform, InstanceUniform};
 
 /// Number of mesh instances to create
 const NUM_MESH_INSTANCES: usize = 1024 * 50;
@@ -185,32 +119,6 @@ impl MeshInstance {
     }
 }
 
-/// Generate positions in an expanding cubic grid
-fn generate_expanding_grid_positions(count: usize, spacing: f32) -> Vec<Vector3<f32>> {
-    let mut positions = Vec::with_capacity(count);
-
-    // Calculate grid dimensions (cube root of count, rounded up)
-    let grid_size = ((count as f32).powf(1.0 / 3.0)).ceil() as i32;
-    let half_grid = grid_size as f32 / 2.0;
-
-    for i in 0..count {
-        // Convert linear index to 3D grid coordinates
-        let z = (i / (grid_size * grid_size) as usize) as i32;
-        let remainder = i % (grid_size * grid_size) as usize;
-        let y = (remainder / grid_size as usize) as i32;
-        let x = (remainder % grid_size as usize) as i32;
-
-        // Center the grid and apply spacing
-        positions.push(Vector3::new(
-            (x as f32 - half_grid) * spacing,
-            (y as f32 - half_grid) * spacing,
-            (z as f32 - half_grid) * spacing,
-        ));
-    }
-
-    positions
-}
-
 /// Renderer for instanced multi-mesh deferred rendering demo with GPU culling.
 pub struct DeferredRenderer {
     // Mesh instances - each has its own transform data
@@ -260,29 +168,12 @@ pub struct DeferredRenderer {
     lights: [Light; renderlib::camera::MAX_LIGHTS],
     num_lights: u32,
 
-    // GPU Frustum Culling resources
-    culling_pipeline: wgpu::ComputePipeline,
-    instance_data_buffer: wgpu::Buffer,
-    view_matrix_buffer: wgpu::Buffer,
-    camera_params_buffer: wgpu::Buffer,
-    #[allow(dead_code)]
-    visible_indices_buffer: wgpu::Buffer,
-    atomic_counter_buffer: wgpu::Buffer,
+    // GPU Frustum Culling system
+    gpu_culling: GpuCullingSystem,
     indirect_draw_buffer: wgpu::Buffer,
-    #[allow(dead_code)]
-    culling_bind_group_layout: wgpu::BindGroupLayout,
-    culling_bind_group: wgpu::BindGroup,
 
-    // NEW: Indirect args generation resources
-    indirect_args_pipeline: wgpu::ComputePipeline,
-    #[allow(dead_code)]
-    visible_count_buffer: wgpu::Buffer,
-    #[allow(dead_code)]
-    compacted_indices_buffer: wgpu::Buffer,
-    mesh_info_uniform_buffer: wgpu::Buffer,
-    #[allow(dead_code)]
-    indirect_args_bind_group_layout: wgpu::BindGroupLayout,
-    indirect_args_bind_group: wgpu::BindGroup,
+    // Indirect args generation system
+    indirect_args_generator: IndirectArgsGenerator,
 
     first_iter: bool,
 }
@@ -390,71 +281,6 @@ impl DeferredRenderer {
         Ok(pipeline)
     }
 
-    /// Create the compute pipeline for frustum culling.
-    fn create_culling_pipeline(
-        device: &wgpu::Device,
-        bind_group_layout: &wgpu::BindGroupLayout,
-    ) -> Result<wgpu::ComputePipeline, String> {
-        let shader_src = load_shader_source(CULLING_SHADER_PATH).unwrap_or_else(|_| {
-            // Fallback shader if file not found
-            include_str!("../shaders/frustum_culling.wgsl").to_string()
-        });
-
-        let shader_module =
-            create_shader_module(device, Some("Frustum Culling Compute Shader"), &shader_src);
-
-        let pipeline_layout = create_pipeline_layout(
-            device,
-            Some("Frustum Culling Pipeline Layout"),
-            &[Some(bind_group_layout)],
-        );
-
-        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("Frustum Culling Compute Pipeline"),
-            layout: Some(&pipeline_layout),
-            module: &shader_module,
-            entry_point: Some("main"),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            cache: None,
-        });
-
-        Ok(pipeline)
-    }
-
-    /// Create the compute pipeline for indirect args generation.
-    fn create_indirect_args_pipeline(
-        device: &wgpu::Device,
-        bind_group_layout: &wgpu::BindGroupLayout,
-    ) -> Result<wgpu::ComputePipeline, String> {
-        let shader_src = load_shader_source(INDIRECT_ARGS_SHADER_PATH).unwrap_or_else(|_| {
-            // Fallback shader if file not found
-            include_str!("../shaders/indirect_args_generation.wgsl").to_string()
-        });
-
-        let shader_module = create_shader_module(
-            device,
-            Some("Indirect Args Generation Compute Shader"),
-            &shader_src,
-        );
-
-        let pipeline_layout = create_pipeline_layout(
-            device,
-            Some("Indirect Args Pipeline Layout"),
-            &[Some(bind_group_layout)],
-        );
-
-        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("Indirect Args Generation Compute Pipeline"),
-            layout: Some(&pipeline_layout),
-            module: &shader_module,
-            entry_point: Some("main"),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            cache: None,
-        });
-
-        Ok(pipeline)
-    }
-
     /// Reload geometry shader.
     fn reload_geometry_shader(&mut self, device: &wgpu::Device) -> Result<(), String> {
         let shader_src = load_shader_source(&self.geometry_shader_path)?;
@@ -516,29 +342,6 @@ impl AppRenderer for DeferredRenderer {
         let position_offsets = generate_expanding_grid_positions(NUM_MESH_INSTANCES, BASE_SPACING);
 
         // Create new buffers for indirect args generation first
-        // Create mesh info uniform buffer
-        let mesh_info_uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Mesh Info Uniform Buffer"),
-            size: 8, // Two u32s: index_count, vertex_count
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        // Create visible count buffer
-        let visible_count_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Visible Count Buffer"),
-            size: 4, // Single u32
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
-
-        // Create compacted indices buffer
-        let compacted_indices_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Compacted Indices Buffer"),
-            size: (NUM_MESH_INSTANCES * 4) as u64, // u32 per instance
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
 
         // Create combined bind group layout for group 0 (camera + instance storage buffer + compacted indices)
         let geometry_bind_group_layout = BindGroupLayoutBuilder::new(device)
@@ -594,18 +397,6 @@ impl AppRenderer for DeferredRenderer {
             Some("Instance Storage Buffer"),
             &instance_data,
             wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        );
-
-        // Create combined bind group for group 0 (camera + instance storage buffer + compacted indices)
-        let geometry_bind_group = create_bind_group_auto(
-            device,
-            Some("Geometry Bind Group"),
-            &geometry_bind_group_layout,
-            &[
-                camera_uniform_buffer.as_entire_binding(),
-                instance_buffer.as_entire_binding(),
-                compacted_indices_buffer.as_entire_binding(),
-            ],
         );
 
         // Create instance index buffer
@@ -701,63 +492,9 @@ impl AppRenderer for DeferredRenderer {
         // GPU Frustum Culling Setup
         // =====================================================================
 
-        // Create bind group layout for culling compute shader
-        let culling_bind_group_layout = BindGroupLayoutBuilder::new(device)
-            .with_label(Some("Culling Bind Group Layout"))
-            // Instance data buffer (read-only storage)
-            .with_storage_buffer(wgpu::ShaderStages::COMPUTE, true)
-            // View matrix buffer (uniform)
-            .with_uniform_buffer(wgpu::ShaderStages::COMPUTE, None)
-            // Camera params buffer (uniform)
-            .with_uniform_buffer(wgpu::ShaderStages::COMPUTE, None)
-            // Visible indices buffer (write-only storage)
-            .with_storage_buffer(wgpu::ShaderStages::COMPUTE, false)
-            // Atomic counter buffer (write-only storage)
-            .with_storage_buffer(wgpu::ShaderStages::COMPUTE, false)
-            .build();
-
-        // Create GPU buffers for culling
-        // Instance data buffer - will be updated each frame with world-space bounding spheres
-        let instance_data_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Culling Instance Data Buffer"),
-            size: (NUM_MESH_INSTANCES * std::mem::size_of::<GpuInstanceData>()) as u64,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        // View matrix buffer for culling
-        let view_matrix_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Culling View Matrix Buffer"),
-            size: 64, // mat4x4<f32>
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        // Camera params buffer for culling
-        let camera_params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Culling Camera Params Buffer"),
-            size: std::mem::size_of::<CullingCameraParams>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        // Visible indices buffer - stores indices of visible instances
-        let visible_indices_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Visible Indices Buffer"),
-            size: (NUM_MESH_INSTANCES * 4) as u64, // u32 per instance
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
-
-        // Atomic counter buffer - single u32 for counting visible instances
-        let atomic_counter_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Atomic Counter Buffer"),
-            size: 4, // u32
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        // Create GPU culling system
+        let gpu_culling = GpuCullingSystem::new(device, NUM_MESH_INSTANCES, CULLING_SHADER_PATH)
+            .expect("Failed to create GPU culling system");
 
         // Indirect draw buffer - contains draw arguments
         // For draw_indexed_indirect, the structure is:
@@ -772,58 +509,34 @@ impl AppRenderer for DeferredRenderer {
             mapped_at_creation: false,
         });
 
-        // Create culling bind group
-        let culling_bind_group = create_bind_group_auto(
-            device,
-            Some("Culling Bind Group"),
-            &culling_bind_group_layout,
-            &[
-                instance_data_buffer.as_entire_binding(),
-                view_matrix_buffer.as_entire_binding(),
-                camera_params_buffer.as_entire_binding(),
-                visible_indices_buffer.as_entire_binding(),
-                atomic_counter_buffer.as_entire_binding(),
-            ],
-        );
-
-        // Create culling compute pipeline
-        let culling_pipeline = Self::create_culling_pipeline(device, &culling_bind_group_layout)
-            .expect("Failed to create culling pipeline");
-
         // =====================================================================
-        // NEW: Indirect Args Generation Setup
+        // Indirect Args Generation Setup
         // =====================================================================
 
-        // Create bind group layout for indirect args generation
-        let indirect_args_bind_group_layout = BindGroupLayoutBuilder::new(device)
-            .with_label(Some("Indirect Args Bind Group Layout"))
-            .with_storage_buffer(wgpu::ShaderStages::COMPUTE, true) // visible_indices (read-only)
-            .with_storage_buffer(wgpu::ShaderStages::COMPUTE, true) // atomic_counter (read-only)
-            .with_storage_buffer(wgpu::ShaderStages::COMPUTE, false) // visible_count (write)
-            .with_storage_buffer(wgpu::ShaderStages::COMPUTE, false) // compacted_indices (write)
-            .with_storage_buffer(wgpu::ShaderStages::COMPUTE, false) // indirect_draw_buffer (write)
-            .with_uniform_buffer(wgpu::ShaderStages::COMPUTE, None) // mesh_info uniform
-            .build();
-
-        // Create bind group for indirect args generation
-        let indirect_args_bind_group = create_bind_group_auto(
+        // Create indirect args generator
+        let indirect_args_generator = IndirectArgsGenerator::new(
             device,
-            Some("Indirect Args Bind Group"),
-            &indirect_args_bind_group_layout,
+            NUM_MESH_INSTANCES,
+            &gpu_culling.visible_indices_buffer,
+            &gpu_culling.atomic_counter_buffer,
+            &indirect_draw_buffer,
+            INDIRECT_ARGS_SHADER_PATH,
+        )
+        .expect("Failed to create indirect args generator");
+
+        // Create combined bind group for group 0 (camera + instance storage buffer + compacted indices)
+        let geometry_bind_group = create_bind_group_auto(
+            device,
+            Some("Geometry Bind Group"),
+            &geometry_bind_group_layout,
             &[
-                visible_indices_buffer.as_entire_binding(),
-                atomic_counter_buffer.as_entire_binding(),
-                visible_count_buffer.as_entire_binding(),
-                compacted_indices_buffer.as_entire_binding(),
-                indirect_draw_buffer.as_entire_binding(),
-                mesh_info_uniform_buffer.as_entire_binding(),
+                camera_uniform_buffer.as_entire_binding(),
+                instance_buffer.as_entire_binding(),
+                indirect_args_generator
+                    .compacted_indices_buffer
+                    .as_entire_binding(),
             ],
         );
-
-        // Create indirect args generation pipeline
-        let indirect_args_pipeline =
-            Self::create_indirect_args_pipeline(device, &indirect_args_bind_group_layout)
-                .expect("Failed to create indirect args pipeline");
 
         // Log which mesh was loaded
         eprintln!(
@@ -844,7 +557,6 @@ impl AppRenderer for DeferredRenderer {
         DeferredRenderer {
             mesh_instances,
             geometry_bind_group_layout,
-            geometry_bind_group,
             camera_uniform_buffer,
             instance_buffer,
             geometry_pipeline,
@@ -866,23 +578,12 @@ impl AppRenderer for DeferredRenderer {
             input_controller: InputController::new(),
             lights,
             num_lights,
-            // GPU Culling resources
-            culling_pipeline,
-            instance_data_buffer,
-            view_matrix_buffer,
-            camera_params_buffer,
-            visible_indices_buffer,
-            atomic_counter_buffer,
+            // GPU Culling system
+            gpu_culling,
             indirect_draw_buffer,
-            culling_bind_group_layout,
-            culling_bind_group,
-            // NEW: Indirect args generation resources
-            indirect_args_pipeline,
-            visible_count_buffer,
-            compacted_indices_buffer,
-            mesh_info_uniform_buffer,
-            indirect_args_bind_group_layout,
-            indirect_args_bind_group,
+            // Indirect args generation system
+            indirect_args_generator,
+            geometry_bind_group,
             first_iter: true,
         }
     }
@@ -992,11 +693,7 @@ impl AppRenderer for DeferredRenderer {
                 .collect();
 
             // Step 2: Upload instance data to GPU buffer
-            queue.write_buffer(
-                &self.instance_data_buffer,
-                0,
-                bytemuck::cast_slice(&instance_data),
-            );
+            self.gpu_culling.update_instance_data(queue, &instance_data);
             Some(instance_rotations)
         } else {
             None
@@ -1005,75 +702,32 @@ impl AppRenderer for DeferredRenderer {
         pt.checkpoint("GPU Instance date");
 
         // Step 3: Upload view matrix and camera params to GPU
-        let view_matrix = camera.get_view_matrix();
-        // Convert Matrix4 to [[f32; 4]; 4] for bytemuck
-        let view_matrix_array: [[f32; 4]; 4] = view_matrix.into();
-        queue.write_buffer(
-            &self.view_matrix_buffer,
-            0,
-            bytemuck::cast_slice(&[view_matrix_array]),
-        );
-
-        let camera_params = CullingCameraParams::new(&camera, aspect);
-        queue.write_buffer(
-            &self.camera_params_buffer,
-            0,
-            bytemuck::cast_slice(&[camera_params]),
-        );
+        self.gpu_culling
+            .update_camera_params(queue, &camera, aspect);
 
         // Step 4: Update mesh info uniform (CPU → GPU)
-        let mesh_info = [
+        self.indirect_args_generator.update_mesh_info(
+            queue,
             mesh_resource.num_indices as u32,
             mesh_asset.vertices.len() as u32,
-        ];
-        queue.write_buffer(
-            &self.mesh_info_uniform_buffer,
-            0,
-            bytemuck::cast_slice(&mesh_info),
         );
 
         // Step 5: Reset atomic counter
-        queue.write_buffer(
-            &self.atomic_counter_buffer,
-            0,
-            bytemuck::cast_slice(&[0u32]),
-        );
+        self.gpu_culling.reset_atomic_counter(queue);
 
         // Step 6: Dispatch frustum culling compute shader
         let mut culling_encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Culling Command Encoder"),
         });
-        {
-            let mut culling_pass =
-                culling_encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                    label: Some("Frustum Culling Compute Pass"),
-                    timestamp_writes: None,
-                });
-
-            culling_pass.set_pipeline(&self.culling_pipeline);
-            culling_pass.set_bind_group(0, &self.culling_bind_group, &[]);
-
-            // Dispatch one thread per instance
-            let workgroup_count = (NUM_MESH_INSTANCES as u32 + 63) / 64;
-            culling_pass.dispatch_workgroups(workgroup_count, 1, 1);
-        }
+        self.gpu_culling
+            .dispatch(&mut culling_encoder, NUM_MESH_INSTANCES);
         queue.submit([culling_encoder.finish()]);
 
         // Step 7: Dispatch indirect args generation compute shader
         let mut indirect_encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Indirect Args Command Encoder"),
         });
-        {
-            let mut indirect_pass =
-                indirect_encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                    label: Some("Indirect Args Generation Compute Pass"),
-                    timestamp_writes: None,
-                });
-
-            indirect_pass.set_pipeline(&self.indirect_args_pipeline);
-            indirect_pass.set_bind_group(0, &self.indirect_args_bind_group, &[]);
-            indirect_pass.dispatch_workgroups(1, 1, 1); // Single workgroup
-        }
+        self.indirect_args_generator.dispatch(&mut indirect_encoder);
         queue.submit([indirect_encoder.finish()]);
         pt.checkpoint("Frustum Culling");
         // Use the mesh_resource we fetched earlier

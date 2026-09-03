@@ -4,6 +4,7 @@
 
 use std::path::Path;
 
+use cgmath::Vector3;
 use wgpu::util::DeviceExt;
 
 /// Creates a buffer initialized with data.
@@ -507,4 +508,42 @@ pub fn create_depth_texture(
     });
 
     (depth_texture, depth_texture_view)
+}
+
+/// Generates positions in an expanding cubic grid.
+///
+/// Creates a 3D grid of positions centered at the origin with the specified spacing.
+/// The grid dimensions are calculated as the cube root of the count, rounded up.
+///
+/// # Arguments
+///
+/// * `count` - Number of positions to generate
+/// * `spacing` - Distance between adjacent positions in world units
+///
+/// # Returns
+///
+/// Vector of 3D positions arranged in a cubic grid
+pub fn generate_expanding_grid_positions(count: usize, spacing: f32) -> Vec<Vector3<f32>> {
+    let mut positions = Vec::with_capacity(count);
+
+    // Calculate grid dimensions (cube root of count, rounded up)
+    let grid_size = ((count as f32).powf(1.0 / 3.0)).ceil() as i32;
+    let half_grid = grid_size as f32 / 2.0;
+
+    for i in 0..count {
+        // Convert linear index to 3D grid coordinates
+        let z = (i / (grid_size * grid_size) as usize) as i32;
+        let remainder = i % (grid_size * grid_size) as usize;
+        let y = (remainder / grid_size as usize) as i32;
+        let x = (remainder % grid_size as usize) as i32;
+
+        // Center the grid and apply spacing
+        positions.push(Vector3::new(
+            (x as f32 - half_grid) * spacing,
+            (y as f32 - half_grid) * spacing,
+            (z as f32 - half_grid) * spacing,
+        ));
+    }
+
+    positions
 }
